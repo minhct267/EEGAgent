@@ -3,8 +3,10 @@ import pandas as pd
 import glob
 import os
 import re
+import time
 from pathlib import Path
 from main import EEGAgent
+from llm_settings import get_planner_settings
 from utils.tuev_metrics import score_predictions, write_file_outputs, write_global_outputs
 
 pattern = re.compile(r"\(\s*([^,()]+?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*\)")
@@ -13,9 +15,10 @@ pattern = re.compile(r"\(\s*([^,()]+?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+
 DATA_DIR = "./data/edf"
 OUT_DIR = "runs/tuev_agent"
 CONFIG_PATH = "config/config.json"
-API_KEY = os.environ.get("DASHSCOPE_API_KEY", "***")
-BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-MODEL_NAME = "main.py default"
+PLANNER = get_planner_settings()
+API_KEY = PLANNER.api_key
+BASE_URL = PLANNER.base_url
+MODEL_NAME = PLANNER.model
 SLEEP_SECONDS = 5
 
 REPORT_OVERLAP_THRESHOLD = 0.7
@@ -172,7 +175,6 @@ ground_truth, negative_labels = load_ground_truth(DATA_DIR)
 
 gap = len(questions)
 for q in tqdm(questions[:gap]):
-    import time
     time.sleep(SLEEP_SECONDS)
     agent = None
     user_question = f'''Please find all epileptic seizures in this EEG between {round(q['x'])} seconds and {round(q['y'])} seconds. 
@@ -181,10 +183,13 @@ Check all channels. For each detected seizure, return exactly one line in this f
 Do not include any extra text, explanation, or commentary. 
 Each line should correspond to one seizure event. List all events for all channels'''
     try:
-        agent = EEGAgent(config_path=CONFIG_PATH,
-                         file_name=q['edf'],
-                         api_key=API_KEY,
-                         base_url=BASE_URL)
+        agent = EEGAgent(
+            config_path=CONFIG_PATH,
+            file_name=q['edf'],
+            api_key=API_KEY,
+            base_url=BASE_URL,
+            model=MODEL_NAME,
+        )
         result = agent.run(user_question)
         raw_response = result['response']
         extracted_events = pattern.findall(raw_response)

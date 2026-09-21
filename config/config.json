@@ -1,5 +1,5 @@
 {
-  "dataPath": "",
+  "dataPath": "data",
   "report_template_path": "RAG",
   "fs": 256,
   "l_freq": 0.5,

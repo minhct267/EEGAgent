@@ -1,8 +1,12 @@
 import os
 import json
-from datetime import datetime
-from main import EEGAgent  
 import time
+from datetime import datetime
+
+import numpy as np
+from sklearn.metrics import accuracy_score, f1_score
+
+from main import EEGAgent
 
 test_subjects = [
     "H_S5","MDD_S10","MDD_S11","H_S21","MDD_S28",
@@ -35,15 +39,13 @@ for subj in subject_files:
     time.sleep(5)
     print(f"\nEvaluating {subj['name']} ...")
 
-    ### init EEGAgent ###
     agent = EEGAgent(
         config_path="config/config.json",
         file_name=subj["file"],
-        api_key="***",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
 
-    response = agent.run(question)
+    result = agent.run(question)
+    response = result["response"]
     print(f"Model response: {response}")
 
     response_clean = response.strip().lower()
@@ -77,10 +79,7 @@ for subj in subject_files:
 summary_path = os.path.join(save_dir, "all_results_summary.json")
 with open(summary_path, "w", encoding="utf-8") as f:
     json.dump(results, f, ensure_ascii=False, indent=2)
-print(f"\n📊 All results summary saved to {summary_path}")
-
-import numpy as np
-from sklearn.metrics import accuracy_score, f1_score
+print(f"\nAll results summary saved to {summary_path}")
 
 y_true = [r["label"] for r in results if r["pred"] is not None]
 y_pred = [r["pred"] for r in results if r["pred"] is not None]

@@ -1,5 +1,7 @@
 import os
 import json
+import time
+import yaml
 from openai import OpenAI
 from tools import function_register
 from tools.registerData import registerData
@@ -8,49 +10,73 @@ from tools.baseInfo import baseInfo, get_age_factor
 from prompt import getSystemPrompt
 from utils.parseCalling import extract_tool_calls, has_config_parameter
 from utils.messageMerge import messageMerge
-import yaml
-import time
+from RAG.embedder import BGEEmbedder
+from RAG.searcher import FaissSearcher
+from llm_settings import get_planner_settings, planner_client, strip_think_tags
+
+
+def resolve_eeg_path(data_path: str, file_name: str) -> str:
+    """Prefer an existing path; otherwise join with config dataPath."""
+    if os.path.exists(file_name):
+        return file_name
+    return os.path.join(data_path or "", file_name)
+
 
 class EEGAgent:
-    def __init__(self, config_path: str, file_name: str, api_key: str, base_url: str):
+    def __init__(
+        self,
+        config_path: str,
+        file_name: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+    ):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = json.load(f)
         with open(os.path.join(self.config['report_template_path'], 'report_template.yaml'), 'r') as file:
             report_template = yaml.safe_load(file)
-        self.file_path = os.path.join(self.config['dataPath'], file_name)
+        self.file_path = resolve_eeg_path(self.config.get('dataPath', ''), file_name)
 
-        ### Load Data... ###
+        # Load EEG with the TUEV bipolar montage by default.
         # data = load_MDD_edf(self.file_path, self.config)
         data = dataLoad(self.file_path, self.config)
         # data = load_Sleep_edf(self.file_path, self.config)
         registerData(data)
 
-        ### generate baseInfo ###
         self.info = baseInfo(self.file_path)
         self.tool_schemas = function_register.export_tool_schemas()
 
-        ### init ###
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        settings = get_planner_settings()
+        self.api_key = api_key if api_key else settings.api_key
+        self.base_url = base_url if base_url else settings.base_url
+        self.model = model if model else settings.model
+        self.timeout = settings.timeout
+        self.reasoning_effort = settings.reasoning_effort
+        if api_key or base_url:
+            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout)
+        else:
+            self.client = planner_client()
 
-        ### construct system prompt ###
         prior_knowlwdge = self.config['prior knowledge'].copy()
         if 'age' in self.info.keys():
             age_factor = get_age_factor(self.info['age'], self.config['prior knowledge']['Age factor'])
             prior_knowlwdge['Age factor'] = age_factor
         self.system_prompt = getSystemPrompt(self.info, self.tool_schemas, prior_knowlwdge, report_template)
         self.messages = [{'role': 'system', 'content': self.system_prompt}]
-    
+
     def prepare_user_message(self, user_query: str):
         self.messages.append({'role': 'user', 'content': user_query})
 
-    def call_model(self, model="qwen3-235b-a22b"): # qwen3-14b qwen3-32b qwen3-235b-a22b
+    def call_model(self, model: str | None = None):
+        used_model = model or self.model
         completion = self.client.chat.completions.create(
-            model=model,
+            model=used_model,
             messages=self.messages,
-            # extra_body={"enable_thinking": False},
-            timeout=60
+            timeout=self.timeout,
+            extra_body={"reasoning_effort": self.reasoning_effort},
         )
-        response = completion.choices[0].message.content
+        message = completion.choices[0].message
+        response = strip_think_tags(message.content)
         self.messages.append({
             "role": "assistant",
             "content": response
@@ -60,7 +86,7 @@ class EEGAgent:
     def handle_tool_calls(self, response):
         calls = extract_tool_calls(response)
         if not calls:
-            return False 
+            return False
 
         function_return = []
         for call in calls:
@@ -71,7 +97,7 @@ class EEGAgent:
                 print(f"No function named {function_name}")
                 continue
 
-            ### automated import config parameters ###
+            # Inject config when the tool signature expects it.
             if has_config_parameter(function) and 'config' not in args:
                 args['config'] = self.config
 
@@ -89,13 +115,9 @@ class EEGAgent:
                 }
                 function_return.append(new_call)
         messageMerge(function_return, self.messages)
-        return True  
+        return True
 
     def run(self, user_query, max_rounds=8):
-        from RAG.embedder import BGEEmbedder
-        from RAG.searcher import FaissSearcher
-        
-        # RAG
         embedder = BGEEmbedder()
         searcher = FaissSearcher("RAG/faiss.index", "RAG/chunks.pkl")
         query_vector = embedder.encode([user_query])[0]
@@ -104,12 +126,13 @@ class EEGAgent:
         for rank, (text, score) in enumerate(results, 1):
             if score >= threshold:
                 self.messages[0]['content'] += f"{rank}. {text}\n"
-        
+
         self.prepare_user_message(user_query)
 
         total_rounds = 0
         total_time = 0.0
         local_tool_time = 0.0
+        response = ""
 
         start_total = time.time()
         stopped_by_max_rounds = False
@@ -139,16 +162,19 @@ class EEGAgent:
             "total_time": total_duration,
             "stopped_by_max_rounds": stopped_by_max_rounds
         }
-        
+
 
 if __name__ == "__main__":
-    # api_key 和 bse_url 配置大模型
+    # Planner credentials and model come from .env (Ollama Cloud).
     agent = EEGAgent(
         config_path="config/config.json",
         file_name="gped_049_a_6.edf",
-        api_key = "***",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
     user_question = "Can epileptic discharges be observed within the first minute? If so, where?"
     print("Human:", user_question)
-    agent.run(user_question)
+    result = agent.run(user_question)
+    print("Assistant:", result["response"])
+    print(
+        f"rounds={result['rounds']} model_time={result['model_time']:.2f}s "
+        f"local_tool_time={result['local_tool_time']:.2f}s total_time={result['total_time']:.2f}s"
+    )
