@@ -5,7 +5,7 @@ from .preprocessing import preprocessing
 from .polar import bipolar_pairs, single_polar, sleep_polar
 mne.set_log_level('WARNING')
 
-# 双极
+# Match an EDF channel name by prefix for bipolar subtraction.
 def match_channel(prefix, channel_list):
     pattern = re.compile(rf'^{prefix}')
     for ch in channel_list:
@@ -15,7 +15,7 @@ def match_channel(prefix, channel_list):
 
 def get_data(raw):
     data = []
-    raw_channels = raw.ch_names  # 获取原始通道名列表
+    raw_channels = raw.ch_names  # Names as stored in the EDF.
     for ch1_prefix, ch2_prefix in bipolar_pairs:
         ch1 = match_channel('EEG '+ch1_prefix, raw_channels)
         ch2 = match_channel('EEG '+ch2_prefix, raw_channels)

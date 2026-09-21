@@ -72,7 +72,7 @@ def healthMDDModel(start: int, end: int, config, segment_length=5):
 
     n_samples = data.shape[1]
     seg_samples = segment_length * fs_target
-    n_segments = n_samples // seg_samples  # 只取完整片段
+    n_segments = n_samples // seg_samples  # Keep only complete 5-second slices.
 
     results = []
 

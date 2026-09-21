@@ -3,10 +3,7 @@ import re
 from nltk.tokenize import sent_tokenize
 
 def extract_clean_text(filepath, header_lines_num=2, footer_lines_num=2):
-    """
-    读取PDF，去除每页前后页眉页脚，合并成全文，
-    并截断Reference之后的内容。
-    """
+    """Read a PDF, drop headers/footers, and cut text after References."""
     doc = fitz.open(filepath)
     all_text_lines = []
 
@@ -41,10 +38,8 @@ def extract_clean_text(filepath, header_lines_num=2, footer_lines_num=2):
     return full_text
 
 def chunk_text_by_sentences(text, max_sentences=5, max_chars=500):
-    """
-    按句子拆分文本，并将句子合并为长度适中的块
-    """
-    text = re.sub(r'\n+', ' ', text).strip() # 避免换行被认为是新起一句.
+    """Split text into sentence chunks capped by count and character length."""
+    text = re.sub(r'\n+', ' ', text).strip()  # Collapse newlines so they are not new sentences.
     sentences = sent_tokenize(text, language='english')
     chunks = []
     current_chunk = []
@@ -52,7 +47,7 @@ def chunk_text_by_sentences(text, max_sentences=5, max_chars=500):
 
     for sent in sentences:
         if len(current_chunk) >= max_sentences or (current_len + len(sent)) > max_chars:
-            if current_chunk:  # 确保当前块不为空
+            if current_chunk:  # Flush the current chunk before starting a new one.
                 chunks.append(" ".join(current_chunk))
             current_chunk = [sent]
             current_len = len(sent)
@@ -65,13 +60,9 @@ def chunk_text_by_sentences(text, max_sentences=5, max_chars=500):
     return chunks
 
 def load_and_chunk(filepath, max_length=500):
-    """
-    加载 PDF 或 TXT 文件，并按段落或句子切分为 chunks。
-    PDF -> 用 extract_clean_text()
-    TXT -> 按行（或空行）切分
-    """
+    """Load a PDF or TXT file and split it into chunks."""
     def chunk_by_lines(text):
-        # 去掉多余空行，并按段落切分
+        # Drop empty lines and treat remaining lines as paragraphs.
         paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
         return paragraphs
 

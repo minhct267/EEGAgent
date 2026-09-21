@@ -1,21 +1,4 @@
-"""Shared event-level TUEV scoring utilities.
-
-Metric policy:
-- Positive TUEV annotations are treated as channel-level GT events.
-- Raw Agent/tool reports on the same channel are merged into report episodes
-  when their temporal gap is small.
-- A GT event is counted as a hit when same-channel report episodes cover at
-  least the configured fraction of that GT event duration.
-- A strict unmatched report is a merged report episode with no positive GT
-  overlap on the same channel.
-- Strict unmatched reports are split into explicit_negative_reports when they
-  overlap an annotated negative event, and unverified_reports when they only
-  fall in unannotated TUEV regions.
-
-The strict unmatched report rate is a conservative report-episode-level
-statistic. It is useful for auditing extra reports, but it is not the same as a
-clinical false alarm frequency measured on a continuous time axis.
-"""
+"""Event-level TUEV scoring: merge reports, count GT hits, and audit unmatched episodes."""
 
 import json
 import math
@@ -124,8 +107,7 @@ def merge_predictions(predictions, gap_threshold=1.0):
 
 
 def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7, gap_threshold=1.0):
-    # Reports are first merged into channel-level episodes. A GT event is hit
-    # when reports on the same channel cover enough of that GT duration.
+    # Merge nearby reports on the same channel; a GT event hits if coverage >= threshold.
     report_episodes = merge_predictions(raw_predictions, gap_threshold=gap_threshold)
     detected_gt = set()
 
@@ -180,9 +162,7 @@ def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7
                 hit_contributing_reports += 1
             continue
 
-        # Strict unmatched reports are reported episodes without any positive
-        # GT overlap on the same channel. They are split into explicit negative
-        # overlap and unverified regions because TUEV labels are sparse.
+        # No positive GT overlap: count as unmatched, then split negative vs unverified.
         strict_unmatched_reports += 1
         if has_negative_overlap:
             explicit_negative_reports += 1

@@ -1,7 +1,4 @@
-"""Load planner and embedding settings from .env.
-
-The planner may be local Ollama or Ollama Cloud. Embeddings stay on local Ollama.
-"""
+"""Load planner and embedding settings from .env (local Ollama by default)."""
 
 from __future__ import annotations
 

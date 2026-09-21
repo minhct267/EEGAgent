@@ -1,10 +1,8 @@
-'''
-专用于处理  名词：解释格式  的txt文件
-'''
+"""Parse term:definition HTML/text into a cleaned glossary."""
 import re
 from bs4 import BeautifulSoup
 
-# 读取原始 txt
+# Read the raw glossary dump.
 with open("glossary_raw.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
@@ -17,20 +15,20 @@ for p in soup.find_all("p"):
         continue
 
     strong = p.find("strong")
-    term = strong.get_text(" ", strip=True).strip(":")  # 提取术语
-    # 删除 <strong>，剩下的文字部分就是定义
+    term = strong.get_text(" ", strip=True).strip(":")  # Term text inside <strong>.
+    # Drop <strong> so the remaining paragraph is the definition.
     strong.extract()
 
     desc = p.get_text(" ", strip=True)
-    # 如果 strong 之后紧跟一个 ":"，去掉它
+    # Strip a leading colon left after the term.
     desc = re.sub(r"^[:\s]+", "", desc)
 
-    # 清理 HTML 实体符号
+    # Unescape common HTML entities.
     desc = desc.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
     results.append((term, desc))
 
-# 输出到文本文件
+# Write "term: definition" pairs.
 with open("glossary_clean.txt", "w", encoding="utf-8") as f:
     for term, desc in results:
         f.write(f"{term}: {desc}\n\n")

@@ -58,7 +58,7 @@ device = 'cpu'
 model_musle_eyem = SingleChannelEEG(cls=2)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(CURRENT_DIR, "localModels", "muscle&eyem.pth")
-model_musle_eyem.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True)) # 这里会自动加载到历史cuda设备上
+model_musle_eyem.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))  # Remap saved tensors onto `device`.
 model_musle_eyem.eval()
 
 @function_register.register(
@@ -139,7 +139,7 @@ def eyemMuscleModel_OneSecond(name: List[str], start:int, end:int, config):
 model_seiz_arti_bckg = SingleChannelEEG(cls=3)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(CURRENT_DIR, "localModels", "seiz&arti&bckg.pth")
-model_seiz_arti_bckg.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True)) # 这里会自动加载到历史cuda设备上
+model_seiz_arti_bckg.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))  # Remap saved tensors onto `device`.
 model_seiz_arti_bckg.eval()
 
 @function_register.register(
@@ -216,7 +216,7 @@ def seizureArtiBckgModel_OneSecond(name: List[str], start:int, end:int, config):
 model_seiz_normal = SingleChannelEEG(cls=2)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(CURRENT_DIR, "localModels", "seiz&normal.pth")
-model_seiz_normal.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True)) # 这里会自动加载到历史cuda设备上
+model_seiz_normal.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))  # Remap saved tensors onto `device`.
 model_seiz_normal.eval()
 
 @function_register.register(

@@ -4,6 +4,8 @@ Scalable and generalizable analysis of brain activity is essential for advancing
 # EEGAgent Framwork
 ![EEGAgent Framework](framework.png)
 
+See [docs/Note.md](docs/Note.md) for setup, test, and eval commands, and [docs/overview.md](docs/overview.md) for a high-level map of the system.
+
 # Project Structure
 ```
 EEGAgent/

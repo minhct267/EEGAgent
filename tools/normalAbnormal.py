@@ -58,7 +58,7 @@ import os
 model_normalEEG = NormalAbnormalEEG(10*100, 64, 4, 8)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(CURRENT_DIR, "localModels", "normal&abnormal.pth")
-model_normalEEG.load_state_dict(torch.load(MODEL_PATH, map_location='cpu', weights_only=True)) # 这里会自动加载到历史cuda设备上
+model_normalEEG.load_state_dict(torch.load(MODEL_PATH, map_location='cpu', weights_only=True))  # Remap saved tensors onto CPU.
 model_normalEEG.eval()
 
 @function_register.register(
@@ -96,21 +96,20 @@ def normalAbnormalModel(config):
     else:
         padded_data = resampled_data[:, :desired_length]
 
-    # Step 3: construct mask
+    # Mask out all-zero windows (np.allclose default atol is 1e-8).
     mask = torch.ones((1, num_windows+1), dtype=torch.int32)
     for i in range(num_windows):
         start = i * window_size
         end = start + window_size
         window = padded_data[:, start:end]
-        if np.allclose(window, 0): # 默认阈值是1e-8
+        if np.allclose(window, 0):
             mask[0, i+1] = 0
 
-    # Step 4: model inferring
     data_tensor = torch.tensor(padded_data, dtype=torch.float32).unsqueeze(0)  # (1, C, T)
     logits = model_normalEEG(data_tensor, mask) 
     probs = torch.softmax(logits, dim=1)         
 
-    # Step 5: return prob
+    # Softmax over normal vs abnormal.
     return {
         "normal Probability": round(probs[0, 0].item(),2),
         "abnormal Probability": round(probs[0, 1].item(),2)

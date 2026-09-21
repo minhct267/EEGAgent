@@ -1,11 +1,4 @@
-"""Planner-specific prompt and tool-result adaptations.
-
-MiniMax-M3 on Ollama Cloud is reliable with the paper's XML ReAct loop, but it
-misreads binary Eye-vs-Muscle scores as a clean-vs-artifact quality check.
-Native OpenAI tool-result messages are also unreliable for this model on Cloud,
-so we keep <FUNCTION>/<ARGS> text and only change prompt, parsing, and how
-results are shown.
-"""
+"""Planner prompt and tool-result adaptations for MiniMax and Qwen3.8."""
 
 from __future__ import annotations
 

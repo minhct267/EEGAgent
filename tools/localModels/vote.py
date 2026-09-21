@@ -1,12 +1,6 @@
 import torch
 def multi_model_predict(models, data_tensor, mask=None):
-    """
-    :param models: list of PyTorch models
-    :param data_tensor: 输入 tensor (shape: [1, C, T])
-    :param mask: 可选 mask tensor
-    :param method: 'soft' or 'hard'
-    :return: 预测类别，以及平均概率（如果使用 soft voting）
-    """
+    """Average softmax scores across models (soft voting)."""
     device = next(models[0].parameters()).device
     data_tensor = data_tensor.to(device)
 

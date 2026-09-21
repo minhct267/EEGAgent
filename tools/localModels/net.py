@@ -5,21 +5,19 @@ import math
 
 def Rope(x):
     B, T, C = x.shape
-    # 计算theta角度
+    # Inverse-frequency angles for each even/odd pair.
     theta = 10000 ** (-torch.arange(0, C, 2, device=x.device) / C) # （C//2）
-    # 生成位置索引
+    # Position index per timestep.
     pos = torch.arange(T, device=x.device).unsqueeze(1) # (T, 1)
-    # 计算旋转角度
+    # Rotation angle per position and frequency.
     angles = pos * theta # (C//2) -> (1, C//2) -> (T, C//2); (T, 1) -> (T, C//2)
-    # 计算三角量
     cos = torch.cos(angles)
     sin = torch.sin(angles)
-    # 拆分数据，两两一组
+    # Split the last dim into even/odd pairs.
     x1, x2 = x[:,:,::2], x[:,:,1::2] # (B, T, C//2)
-    # 旋转
     rotated_x1 = x1*cos-x2*sin # (B, T, C//2)
     rotated_x2 = x1*sin+x2*cos
-    # 还原
+    # Interleave the rotated pairs back to C.
     return torch.stack([rotated_x1, rotated_x2], dim=-1).flatten(-2) # (B, T, C//2, 2) -> (B, T, C)
 
 class MultiHeadSelfAttentionRoPE(nn.Module):
@@ -34,7 +32,7 @@ class MultiHeadSelfAttentionRoPE(nn.Module):
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
-        self.out_proj.SCALE = 1 # 增益系数
+        self.out_proj.SCALE = 1  # Residual gain scale.
 
     def forward(self, x, pad_mask=None):
         # x: (batch, seq_len, embed_dim)
@@ -44,18 +42,18 @@ class MultiHeadSelfAttentionRoPE(nn.Module):
         k = self.k_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # RoPE 需要对每个头的Q,K做，先reshape回(batch*heads, seq_len, head_dim)
+        # RoPE each head's Q and K after flattening heads into the batch dim.
         q = q.reshape(B * self.num_heads, T, self.head_dim)
         k = k.reshape(B * self.num_heads, T, self.head_dim)
 
         q = Rope(q)
         k = Rope(k)
 
-        # reshape回(B, heads, T, head_dim)
+        # Restore (B, heads, T, head_dim).
         q = q.view(B, self.num_heads, T, self.head_dim)
         k = k.view(B, self.num_heads, T, self.head_dim)
 
-        # scaled dot product attention
+        # Scaled dot-product attention.
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B, heads, T, T)
         if pad_mask is not None: # (B, T)
             attn_scores = attn_scores.masked_fill(pad_mask[:, None, None, :] == 0, float("-inf"))

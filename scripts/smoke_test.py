@@ -1,7 +1,4 @@
-"""Smoke-test the planner (local Ollama by default) and local BGE-M3 embeddings.
-
-Does not run TUEV / MDD / Sleep evaluation suites.
-"""
+"""Smoke-test the planner and local BGE-M3 embeddings; does not run eval suites."""
 
 from __future__ import annotations
 

@@ -1,6 +1,4 @@
-# ==========================
-# Sleep EEGAgent 
-# ==========================
+# Sleep EEGAgent evaluation.
 import os
 import json
 import time
@@ -15,15 +13,11 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 import mne
 import regex as re
 
-# ==========================
-# Basic Configuration
-# ==========================
 DATA_PATH = "./eval/sleep/data/file_test.npy"
-EEG_DIR = "./eval/sleep/sleep-cassette"  # EDF文件所在文件夹
+EEG_DIR = "./eval/sleep/sleep-cassette"  # Folder of Sleep-EDF PSG/hypnogram files.
 SAVE_DIR = "./eval/eval_logs/Sleep"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# read test files
 files = np.load(DATA_PATH)
 print(f"Loaded {len(files)} test subjects.")
 
@@ -37,9 +31,6 @@ LABEL_MAP = {
     'Sleep stage R': 4
 }
 
-# ==========================
-# experiment setup
-# ==========================
 SEGMENT_DURATION = 1800 
 QUESTION_TEMPLATE = (
     "You are an expert in sleep EEG analysis. "
@@ -53,7 +44,6 @@ QUESTION_TEMPLATE = (
     "[(W, 0, 30), (N1, 30, 60), (N2, 60, 90), ...]\n"
     "Do not add explanations, extra text, or code comments — only return the list."
 )
-# ==========================
 
 def extract_range(hyp_file, extend_wake=1800, random_pick=True):
     annots = mne.read_annotations(hyp_file)
@@ -70,7 +60,7 @@ def extract_range(hyp_file, extend_wake=1800, random_pick=True):
         sleep_start = wake_onsets[max_gap_idx] + wake_durations[max_gap_idx]
         sleep_end = wake_onsets[max_gap_idx + 1]
 
-    # 扩展并限制到 annotation 范围
+    # Pad the sleep window with wake and clamp to the annotation range.
     total_end = annots[-1]['onset'] + annots[-1]['duration']
     sleep_start = max(0.0, sleep_start - extend_wake)
     sleep_end = min(sleep_end + extend_wake, total_end)
@@ -88,13 +78,11 @@ def extract_range(hyp_file, extend_wake=1800, random_pick=True):
         else:
             start = sleep_start + (sleep_total - SEGMENT_DURATION) / 2.0
         end = start + SEGMENT_DURATION
-        # 保险检查
+        # Clamp the picked window if it overruns the recording.
         if end > total_end:
             end = total_end
             start = max(sleep_start, end - SEGMENT_DURATION)
 
-    # debug 打印（运行一次看下输出）
-    # print(f"[DEBUG] sleep_start={sleep_start:.1f}, sleep_end={sleep_end:.1f}, pick={start:.1f}-{end:.1f}, total_end={total_end:.1f}")
     return start, end
 
 
@@ -106,12 +94,12 @@ def load_ground_truth(hyp_file, start_time, end_time, epoch_len=30):
     offset_arr = np.array([a['onset'] + a['duration'] for a in annotations])
     desc_arr = np.array([a['description'] for a in annotations])
 
-    # Divide from start_time to end_time every 30 seconds
+    # Slice annotations into 30-second epochs.
     n_epochs = int(np.floor((end_time - start_time) / epoch_len))
     for i in range(n_epochs):
         epoch_start = start_time + i * epoch_len
 
-        # find epoch in which annotation 
+        # Find the annotation covering this epoch start. 
         idx = np.where((onset_arr <= epoch_start) & (epoch_start < offset_arr))[0]
         if len(idx) > 0:
             desc = desc_arr[idx[0]]
@@ -127,9 +115,7 @@ def load_ground_truth(hyp_file, start_time, end_time, epoch_len=30):
     return labels
 
 
-# ==========================
-# main loop
-# ==========================
+# Main evaluation loop.
 all_true, all_pred = [], []
 results = []
 
@@ -151,7 +137,7 @@ for i, (psg_file, hyp_file) in enumerate(files):
     result = agent.run(question)
     response = result["response"]
 
-    # Ground truth
+    # Ground-truth stages for this window.
     gt_segment = load_ground_truth(hyp_path, start_time=start_t, end_time=end_t)
     n_epochs = len(gt_segment)
     
@@ -205,11 +191,7 @@ for i, (psg_file, hyp_file) in enumerate(files):
     save_path = os.path.join(SAVE_DIR, f"{psg_file[:-4]}_{timestamp}.json")
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
-    # print(f"  Saved log to {save_path}")
-
-# ==========================
-# summary
-# ==========================
+# Write the run summary.
 if all_true:
     cm_total = confusion_matrix(all_true, all_pred, labels=STAGE_LABELS)
     acc_total = accuracy_score(all_true, all_pred)

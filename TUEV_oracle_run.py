@@ -1,15 +1,4 @@
-"""Run tool-only TUEV evaluation with event-level scoring.
-
-This script evaluates the local seizure tool directly, without the LLM Agent.
-It scans the annotated TUEV candidate windows, calls the one-second seizure
-tool in valid time chunks, converts tool probabilities into channel-time
-reports, and scores those reports with the same event-level policy used by the
-Agent evaluation.
-
-The oracle result is meant to describe the callable tool's behavior under the
-current scoring protocol. It helps separate local tool capacity from LLM-side
-tool selection, window handling, and response parsing.
-"""
+"""Tool-only TUEV eval: score local seizure tools with the same event-level policy as the agent."""
 
 import argparse
 import csv
@@ -454,9 +443,6 @@ def main():
     aggregate = run_oracle(pairs, Path(args.config), args.threshold, Path(args.out_dir))
     print(json.dumps(aggregate, ensure_ascii=False, indent=2))
 
-'''
-python3 TUEV_oracle_run.py --data-dir xxx/TUEV/edf/eval 指定TUEV数据集的测试集或者其他子集
---out-dir 指定结果存储路径
-'''
+# Example: python TUEV_oracle_run.py --data-dir <TUEV eval dir> --out-dir runs/tuev_oracle_run
 if __name__ == "__main__":
     main()
