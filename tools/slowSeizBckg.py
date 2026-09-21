@@ -88,7 +88,13 @@ for i, path in enumerate(slowSeizBckgEEGModel_paths):
     slowSeizBckgModels.append(model)
 
 @function_register.register(
-    description="The probability that the data analyzed between [start, end] seconds contains slow waves, epilepsy, and background activity.",
+    description=(
+        "Coarse 10-second montage classifier for the interval [start, end]. "
+        "Each returned window has probabilities for background (bckg), slow waves (slow), and seizure (seiz). "
+        "The interval is split into consecutive 10-second epochs; shorter remainders are dropped. "
+        "High seiz means epileptic activity is likely in that 10-second window but is not channel-localized. "
+        "Follow up with 1-second tools to name channels and finer times."
+    ),
     parameters=[
         {
             "name": "start",
@@ -98,12 +104,15 @@ for i, path in enumerate(slowSeizBckgEEGModel_paths):
         {
             "name": "end",
             "type": "int",
-            "description": "End time in seconds."
+            "description": "End time in seconds. Should be at least 10 seconds after start."
         }
     ],
     returns={
         "type": "List[Dict]",
-        "description": "A list of dictionaries. Each dictionary represents 10 seconds of analyzed data."
+        "description": (
+            "One dict per 10-second epoch: duration plus Prob={bckg, slow, seiz}. "
+            "These scores are independent of eyemMuscleModel_OneSecond."
+        )
     }
 )
 def slowSeizBckgModel_TenSeconds(start: int, end: int, config):

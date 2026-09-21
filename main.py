@@ -7,12 +7,20 @@ from tools import function_register
 from tools.registerData import registerData
 from tools.dataLoad import dataLoad, load_MDD_edf, load_Sleep_edf
 from tools.baseInfo import baseInfo, get_age_factor
+from planner_adapt import (
+    CONTINUE_AFTER_TOOLS,
+    DISCHARGE_TOOL_NAMES,
+    continue_after_tools,
+    filter_tool_schemas,
+    preserve_planner_reasoning,
+    tool_results_as_user,
+)
 from prompt import getSystemPrompt
 from utils.parseCalling import extract_tool_calls, has_config_parameter
 from utils.messageMerge import messageMerge
 from RAG.embedder import BGEEmbedder
 from RAG.searcher import FaissSearcher
-from llm_settings import get_planner_settings, planner_client, strip_think_tags
+from llm_settings import get_planner_settings, planner_client, planner_extra_body, strip_think_tags
 
 
 def resolve_eeg_path(data_path: str, file_name: str) -> str:
@@ -30,6 +38,7 @@ class EEGAgent:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
+        tool_names: tuple[str, ...] | list[str] | None = None,
     ):
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = json.load(f)
@@ -44,7 +53,8 @@ class EEGAgent:
         registerData(data)
 
         self.info = baseInfo(self.file_path)
-        self.tool_schemas = function_register.export_tool_schemas()
+        self.tool_names = tool_names
+        self.tool_schemas = filter_tool_schemas(function_register.export_tool_schemas(), tool_names)
 
         settings = get_planner_settings()
         self.api_key = api_key if api_key else settings.api_key
@@ -52,6 +62,10 @@ class EEGAgent:
         self.model = model if model else settings.model
         self.timeout = settings.timeout
         self.reasoning_effort = settings.reasoning_effort
+        self.extra_body = planner_extra_body(settings)
+        self.preserve_reasoning = preserve_planner_reasoning(self.model, self.reasoning_effort)
+        self.tool_results_as_user = tool_results_as_user(self.model)
+        self._appended_assistant = False
         if api_key or base_url:
             self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout)
         else:
@@ -61,7 +75,13 @@ class EEGAgent:
         if 'age' in self.info.keys():
             age_factor = get_age_factor(self.info['age'], self.config['prior knowledge']['Age factor'])
             prior_knowlwdge['Age factor'] = age_factor
-        self.system_prompt = getSystemPrompt(self.info, self.tool_schemas, prior_knowlwdge, report_template)
+        self.system_prompt = getSystemPrompt(
+            self.info,
+            self.tool_schemas,
+            prior_knowlwdge,
+            report_template,
+            planner_model=self.model,
+        )
         self.messages = [{'role': 'system', 'content': self.system_prompt}]
 
     def prepare_user_message(self, user_query: str):
@@ -73,18 +93,31 @@ class EEGAgent:
             model=used_model,
             messages=self.messages,
             timeout=self.timeout,
-            extra_body={"reasoning_effort": self.reasoning_effort},
+            extra_body=self.extra_body,
         )
         message = completion.choices[0].message
-        response = strip_think_tags(message.content)
-        self.messages.append({
-            "role": "assistant",
-            "content": response
-        })
-        return response
+        raw_content = message.content or ""
+        visible = strip_think_tags(raw_content)
+        stored = raw_content if self.preserve_reasoning else visible
+        self._appended_assistant = bool(stored.strip())
+        if self._appended_assistant:
+            self.messages.append({
+                "role": "assistant",
+                "content": stored
+            })
+        return visible
 
     def handle_tool_calls(self, response):
-        calls = extract_tool_calls(response)
+        source = response
+        if (
+            getattr(self, "_appended_assistant", False)
+            and self.messages
+            and self.messages[-1].get("role") == "assistant"
+        ):
+            source = self.messages[-1].get("content") or response
+        calls = extract_tool_calls(source)
+        if not calls and source != response:
+            calls = extract_tool_calls(response)
         if not calls:
             return False
 
@@ -114,7 +147,11 @@ class EEGAgent:
                     "instruction": "The tool call failed. Revise the arguments to satisfy the tool constraints before calling again."
                 }
                 function_return.append(new_call)
-        messageMerge(function_return, self.messages)
+        if not function_return:
+            return False
+        messageMerge(function_return, self.messages, as_user=self.tool_results_as_user)
+        if continue_after_tools(self.model) and not self.tool_results_as_user:
+            self.messages.append({"role": "user", "content": CONTINUE_AFTER_TOOLS})
         return True
 
     def run(self, user_query, max_rounds=8):
@@ -136,6 +173,7 @@ class EEGAgent:
 
         start_total = time.time()
         stopped_by_max_rounds = False
+        empty_retries = 0
         while total_rounds < max_rounds:
             round_start = time.time()
             response = self.call_model()
@@ -147,15 +185,35 @@ class EEGAgent:
             has_more_tools = self.handle_tool_calls(response)
             local_tool_time += (time.time() - tool_start)
 
-            if not has_more_tools:
+            if has_more_tools:
+                continue
+            if response.strip():
                 break
+            if empty_retries >= 1:
+                break
+            empty_retries += 1
+            self.messages.append({
+                "role": "user",
+                "content": (
+                    "The previous model turn was empty. Using the tool results already "
+                    "in this conversation, write the final answer now. If you still need "
+                    "a tool, emit <FUNCTION>/<ARGS> with valid JSON."
+                ),
+            })
         else:
             stopped_by_max_rounds = True
 
         total_duration = time.time() - start_total
 
+        last_assistant = ""
+        for message in reversed(self.messages):
+            if message.get("role") == "assistant":
+                last_assistant = message.get("content") or ""
+                break
+
         return {
             "response": response,
+            "raw_assistant": last_assistant,
             "rounds": total_rounds,
             "model_time": total_time,
             "local_tool_time": local_tool_time,
@@ -165,10 +223,11 @@ class EEGAgent:
 
 
 if __name__ == "__main__":
-    # Planner credentials and model come from .env (Ollama Cloud).
+    # Planner credentials and model come from .env (local Ollama by default).
     agent = EEGAgent(
         config_path="config/config.json",
         file_name="gped_049_a_6.edf",
+        tool_names=DISCHARGE_TOOL_NAMES,
     )
     user_question = "Can epileptic discharges be observed within the first minute? If so, where?"
     print("Human:", user_question)

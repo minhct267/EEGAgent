@@ -1,4 +1,4 @@
-"""Smoke-test the Ollama Cloud planner and local BGE-M3 embedding stack.
+"""Smoke-test the planner (local Ollama by default) and local BGE-M3 embeddings.
 
 Does not run TUEV / MDD / Sleep evaluation suites.
 """
@@ -19,18 +19,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from llm_settings import (  # noqa: E402
     get_embed_settings,
     get_planner_settings,
-    has_planner_api_key,
+    is_local_base_url,
     load_env,
+    model_name_available,
     planner_client,
+    planner_extra_body,
+    planner_is_ready,
     strip_think_tags,
 )
 from RAG.embedder import BGEEmbedder  # noqa: E402
 from RAG.searcher import FaissSearcher  # noqa: E402
 from main import EEGAgent  # noqa: E402
+from planner_adapt import DISCHARGE_TOOL_NAMES  # noqa: E402
 from tools.dataLoad import dataLoad  # noqa: E402
 from tools.registerData import registerData  # noqa: E402
 from tools.singleChannel import seizureNormalModel_OneSecond  # noqa: E402
@@ -43,8 +49,9 @@ CHUNKS_PATH = PROJECT_ROOT / "RAG" / "chunks.pkl"
 REGISTRY_PATH = PROJECT_ROOT / "RAG" / "registered_files.json"
 CONFIG_PATH = PROJECT_ROOT / "config" / "config.json"
 AGENT_QUESTION = "Can epileptic discharges be observed within the first minute? If so, where?"
-ALL_PHASES = ("env", "cloud", "embed", "rag", "tools", "agent")
-DEFAULT_PHASES = ("env", "cloud", "embed", "rag", "tools")
+ALL_PHASES = ("env", "planner", "embed", "rag", "tools", "agent")
+DEFAULT_PHASES = ("env", "planner", "embed", "rag", "tools")
+PHASE_ALIASES = {"cloud": "planner"}
 
 
 def _pass(name: str, detail: str) -> None:
@@ -56,61 +63,61 @@ def _fail(name: str, detail: str) -> None:
     raise SystemExit(1)
 
 
+def _list_local_models(base_url: str) -> list[str]:
+    with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=5) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return [item.get("id", "") for item in payload.get("data", [])]
+
+
 def phase_env() -> None:
     load_env()
     embed = get_embed_settings()
+    planner = get_planner_settings()
     if not SAMPLE_EDF.exists():
         _fail("env", f"Sample EDF not found: {SAMPLE_EDF}")
 
     try:
-        with urllib.request.urlopen(f"{embed.base_url.rstrip('/')}/models", timeout=5) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        model_ids = _list_local_models(embed.base_url)
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         _fail(
             "env",
             f"Local Ollama is not reachable at {embed.base_url}. Start Ollama and pull {embed.model}. ({exc})",
         )
 
-    model_ids = [item.get("id", "") for item in payload.get("data", [])]
-    if embed.model not in model_ids and embed.model.replace(":latest", "") not in model_ids:
+    if not model_name_available(model_ids, embed.model):
         _fail(
             "env",
-            f"Embedding model {embed.model} is not available locally. Seen models: {model_ids or payload}",
+            f"Embedding model {embed.model} is not available locally. Seen models: {model_ids}",
         )
 
-    if has_planner_api_key():
-        _pass("env", f"Local Ollama is up, {embed.model} is present, planner API key is set.")
-    else:
-        _pass(
+    if is_local_base_url(planner.base_url) and not model_name_available(model_ids, planner.model):
+        _fail(
             "env",
-            f"Local Ollama is up and {embed.model} is present. OLLAMA_API_KEY is empty; cloud/agent phases will fail until you set it.",
+            f"Planner model {planner.model} is not available locally. Seen models: {model_ids}",
         )
 
+    _pass(
+        "env",
+        f"Local Ollama is up, embed={embed.model}, planner={planner.model} at {planner.base_url}.",
+    )
 
-def phase_cloud() -> None:
-    if not has_planner_api_key():
-        _fail("cloud", "OLLAMA_API_KEY is missing. Add it to the project .env file.")
+
+def phase_planner() -> None:
+    ready, detail = planner_is_ready()
+    if not ready:
+        _fail("planner", detail)
     settings = get_planner_settings()
     client = planner_client()
-    models = client.models.list()
-    model_ids = [item.id for item in models.data]
-    if settings.model not in model_ids:
-        qwen_ids = [item for item in model_ids if "qwen" in item.lower()]
-        _fail(
-            "cloud",
-            f"Planner model {settings.model} was not in GET /v1/models. Qwen models on this account: {qwen_ids or model_ids}",
-        )
-
     completion = client.chat.completions.create(
         model=settings.model,
         messages=[{"role": "user", "content": "Reply with the single word OK."}],
         timeout=settings.timeout,
-        extra_body={"reasoning_effort": settings.reasoning_effort},
+        extra_body=planner_extra_body(settings),
     )
     text = strip_think_tags(completion.choices[0].message.content)
     if not text:
-        _fail("cloud", "Planner returned an empty message.")
-    _pass("cloud", f"model={settings.model} reply={text!r}")
+        _fail("planner", "Planner returned an empty message.")
+    _pass("planner", f"{detail} reply={text!r}")
 
 
 def phase_embed() -> None:
@@ -182,12 +189,21 @@ def phase_tools() -> None:
 
 
 def phase_agent() -> None:
-    if not has_planner_api_key():
-        _fail("agent", "OLLAMA_API_KEY is missing. Add it to the project .env file.")
-    agent = EEGAgent(config_path=str(CONFIG_PATH), file_name="gped_049_a_6.edf")
+    ready, detail = planner_is_ready()
+    if not ready:
+        _fail("agent", detail)
+    agent = EEGAgent(
+        config_path=str(CONFIG_PATH),
+        file_name="gped_049_a_6.edf",
+        tool_names=DISCHARGE_TOOL_NAMES,
+    )
     result = agent.run(AGENT_QUESTION)
     response = result["response"] or ""
-    called = any(extract_tool_calls(message.get("content") or "") for message in agent.messages)
+    called = any(
+        extract_tool_calls(message.get("content") or "")
+        for message in agent.messages
+        if message.get("role") == "assistant"
+    )
     if not called:
         _fail(
             "agent",
@@ -205,7 +221,7 @@ def phase_agent() -> None:
 
 PHASE_FUNCS = {
     "env": phase_env,
-    "cloud": phase_cloud,
+    "planner": phase_planner,
     "embed": phase_embed,
     "rag": phase_rag,
     "tools": phase_tools,
@@ -216,7 +232,12 @@ PHASE_FUNCS = {
 def parse_phases(raw: str) -> list[str]:
     if raw.strip().lower() == "all":
         return list(ALL_PHASES)
-    phases = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    phases = []
+    for item in raw.split(","):
+        name = PHASE_ALIASES.get(item.strip().lower(), item.strip().lower())
+        if not name:
+            continue
+        phases.append(name)
     unknown = [item for item in phases if item not in PHASE_FUNCS]
     if unknown:
         raise SystemExit(f"Unknown phases: {unknown}. Choose from {list(ALL_PHASES)} or all.")
@@ -228,8 +249,8 @@ def main() -> None:
     parser.add_argument(
         "--phase",
         default=",".join(DEFAULT_PHASES),
-        help="Comma-separated phases: env,cloud,embed,rag,tools,agent (or all). "
-        "Default skips the full agent call.",
+        help="Comma-separated phases: env,planner,embed,rag,tools,agent (or all). "
+        "'cloud' is accepted as an alias for planner. Default skips the full agent call.",
     )
     args = parser.parse_args()
     phases = parse_phases(args.phase)

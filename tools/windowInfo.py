@@ -90,7 +90,8 @@ def compute_psd(name: List[str], start: int, end: int, config):
         band_power = {}
         for band_name, (low, high) in freq_bands.items():
             idx_band = np.logical_and(f >= low, f <= high)
-            band_power[band_name] = "{:.2e}".format(np.trapz(Pxx[idx_band], f[idx_band])) # 积分
+            integrate = getattr(np, "trapezoid", np.trapz)
+            band_power[band_name] = "{:.2e}".format(integrate(Pxx[idx_band], f[idx_band]))
         psds[ch_name] = band_power
     return psds
 
@@ -101,7 +102,7 @@ def compute_psd(name: List[str], start: int, end: int, config):
         {
             "name": "channel_pairs",
             "type": "List[Tuple[str, str]]",
-            "description": "List of left-right channel pairs, e.g., ['FP1-F7', 'FP2-F8')]. ",
+            "description": "List of left-right channel pairs, e.g., [['FP1-F7', 'FP2-F8'], ['F7-T3', 'F8-T4']].",
         },
         {
             "name": "start",

@@ -1,0 +1,15 @@
+{
+  "files": 1,
+  "model": "qwen3.8:27b",
+  "total_gt": 0,
+  "total_reports": 28,
+  "hit_rate": NaN,
+  "strict_unmatched_report_rate": 1.0,
+  "explicit_negative_report_rate": 0.7142857142857143,
+  "unverified_report_rate": 0.2857142857142857,
+  "hits": 0,
+  "misses": 0,
+  "strict_unmatched_reports": 28,
+  "explicit_negative_reports": 20,
+  "unverified_reports": 8
+}

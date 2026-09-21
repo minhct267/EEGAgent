@@ -63,13 +63,15 @@ model_musle_eyem.eval()
 
 @function_register.register(
     description=(
-        "Use this tool to classify the type of artifact (eye movement or muscle) "
-        "in EEG signals within a specific short time window (typically 1 second). "
-        "It should be called only when artifacts have already been detected or suspected. "
-        "Input channels should be in bipolar format (e.g., 'FP1-F7' or 'F7-T3'), "
-        "and the analysis duration must be short (1–10 seconds). "
-        "The tool returns, for each second, the probability that the signal belongs "
-        "to 'Eye movement' or 'Muscle artifact'."
+        "Binary artifact-TYPE classifier: Eye movement vs Muscle only. "
+        "Call it only after another tool has already flagged artifact, when you need to know "
+        "whether that artifact looks like eye movement or muscle. "
+        "It is NOT a clean-vs-artifact or signal-quality detector. "
+        "The two class probabilities always sum to about 1.0; there is no 'clean' class. "
+        "A high Muscle probability does NOT mean the EEG is unusable and must NOT be used "
+        "to discard seizure or epileptiform findings from other tools. "
+        "To decide seizure vs artifact vs background, call seizureArtiBckgModel_OneSecond instead. "
+        "Channels must be bipolar (e.g., 'FP1-F7'). Duration must be 1-10 seconds."
     ),
     parameters=[
         {
@@ -99,9 +101,9 @@ model_musle_eyem.eval()
     returns={
         "type": "List[Dict]",
         "description": (
-            "Each element in the list corresponds to one second of analysis. "
-            "Each dictionary includes the time duration and, for each channel, "
-            "the probabilities of 'Eye movement' and 'Muscle artifact'."
+            "One dict per second: duration plus per-channel "
+            "{'Eye movement': p, 'Muscle artifact': 1-p}. "
+            "These two numbers always compete with each other; they are not contamination rates."
         )
     }
 )
@@ -128,8 +130,8 @@ def eyemMuscleModel_OneSecond(name: List[str], start:int, end:int, config):
 
         for j, v in enumerate(chs):
             info[v] = {
-                "Eyem movement": round(probs[j, 0].item(),2),
-                "Muscle artifact": round(probs[j, 1].item(),2)
+                "Eye movement": round(probs[j, 0].item(), 2),
+                "Muscle artifact": round(probs[j, 1].item(), 2),
             }
         infos.append(info)
     return infos
@@ -142,13 +144,11 @@ model_seiz_arti_bckg.eval()
 
 @function_register.register(
     description=(
-        "Use this tool to analyze EEG signals and estimate the probability that "
-        "a given channel segment (typically 1 second) belongs to one of three classes: "
-        "'Background', 'Artifact', or 'Seizure'. "
-        "This is a fine-grained classifier suitable for second-level EEG inspection. "
-        "Use it when the user asks questions like "
-        "'What type of activity is between 20 and 21 seconds in FP1-F7?' "
-        "or 'Is this second more likely seizure or artifact?'."
+        "Fine-grained 1-second 3-class classifier per channel: background (bckg), "
+        "artifact, or seizure (seiz). This is the tool that can separate seizure from artifact. "
+        "Use it when a coarse seizure score is high and you need to test whether the second "
+        "is artifact-driven. Do not substitute eyemMuscleModel_OneSecond for this decision. "
+        "Duration must be 1-10 seconds."
     ),
     parameters=[
         {
@@ -176,9 +176,9 @@ model_seiz_arti_bckg.eval()
     returns={
         "type": "List[Dict]",
         "description": (
-            "A list where each item corresponds to one second of analyzed data. "
-            "Each dictionary contains the time window and, for each channel, "
-            "the probabilities of 'Background', 'Artifact', and 'Seizure'."
+            "One dict per second: duration plus per-channel "
+            "{'bckg': p, 'artifact': p, 'seiz': p} (softmax, sum ~ 1). "
+            "High seiz supports reporting a discharge on that channel and second."
         )
     }
 )
@@ -221,10 +221,10 @@ model_seiz_normal.eval()
 
 @function_register.register(
     description=(
-        "Compute the probability of seizure vs. non-seizure activity for each channel "
-        "within a specified time window. The function processes the data in 1-second segments, "
-        "and returns probabilities for each segment and each channel. "
-        "The time interval between start and end must not exceed 10 seconds."
+        "Fine-grained 1-second 2-class classifier per channel: Non-seiz vs seiz. "
+        "Use it to localize epileptic activity in time and channel after a coarse window looks abnormal. "
+        "It does not label artifact type. If you must test artifact vs seizure, "
+        "also call seizureArtiBckgModel_OneSecond. Duration must be 1-10 seconds."
     ),
     parameters=[
         {
@@ -246,8 +246,8 @@ model_seiz_normal.eval()
     returns={
         "type": "List[Dict]",
         "description": (
-            "A list of dictionaries, one per 1-second segment. Each dictionary contains the segment duration "
-            "and the seizure/non-seizure probabilities for each channel."
+            "One dict per second: duration plus per-channel "
+            "{'Non-seiz': p, 'seiz': p}. High seiz is evidence of a discharge on that channel and second."
         )
     }
 )

@@ -62,11 +62,18 @@ model_normalEEG.load_state_dict(torch.load(MODEL_PATH, map_location='cpu', weigh
 model_normalEEG.eval()
 
 @function_register.register(
-    description="Analyze the probability of pathological normality and abnormality in the entire EEG record.",
-    parameters={}, 
+    description=(
+        "Whole-record classifier: probability that the EEG is pathologically normal vs abnormal. "
+        "This does not localize channel or time and does not distinguish seizure from artifact. "
+        "Use it as a coarse first check, then call interval/channel tools to find discharges."
+    ),
+    parameters=[],
     returns={
         "type": "Dict[str, float]",
-        "description": "Probability of pathological normality and abnormality"
+        "description": (
+            "Keys: 'normal Probability', 'abnormal Probability'. "
+            "Abnormal=1.0 means the record is abnormal, not that every second is a seizure."
+        )
     }
 )
 def normalAbnormalModel(config):

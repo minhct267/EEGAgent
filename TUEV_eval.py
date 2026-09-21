@@ -15,10 +15,16 @@ from tqdm import tqdm
 
 from llm_settings import get_planner_settings, load_env
 from main import EEGAgent
+from planner_adapt import DISCHARGE_TOOL_NAMES
 from utils.tuev_metrics import score_predictions, write_file_outputs, write_global_outputs
 
 EVENT_PATTERN = re.compile(
     r"\(\s*([^,()]+?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*\)"
+)
+LINE_EVENT_PATTERN = re.compile(
+    r"^\s*[-*]?\s*([A-Za-z][A-Za-z0-9]*\s*-\s*[A-Za-z][A-Za-z0-9]*)\s*,"
+    r"\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*$",
+    re.MULTILINE,
 )
 
 DEFAULT_DATA_DIR = r"D:\Datasets\TUH-EEG\TUEV\v2.0.1\edf\eval"
@@ -41,10 +47,16 @@ CHANNEL_MAP = {
 }
 
 WINDOW_QUESTION = """Please find all epileptic seizures in this EEG between {start} seconds and {end} seconds.
-Check all channels. For each detected seizure, return exactly one line in this format:
+Check all channels. Inspect every second of this interval, starting at the beginning.
+Report a channel only when a 1-second seizure tool shows seiz as the top class and seiz >= 0.50.
+If consecutive seconds on the same channel meet that rule, return one merged line covering the full span.
+For each detected seizure, return exactly one line in this format:
 (channel_name, time_start, time_end)
-Do not include any extra text, explanation, or commentary.
-Each line should correspond to one seizure event. List all events for all channels"""
+Example:
+(FP1-F7, 12.0, 14.0)
+(FP2-F8, 12.5, 13.5)
+If there are no seizures, write exactly: No events found
+Do not include any extra text, explanation, or commentary."""
 
 
 def parse_file_list(raw: str | None) -> set[str] | None:
@@ -181,12 +193,26 @@ def append_raw_log(out_dir, stem, log):
         handle.write(json.dumps(raw, ensure_ascii=False, default=str) + "\n")
 
 
+def _normalize_channel(name):
+    return re.sub(r"\s+", "", name).strip()
+
+
 def parse_events(raw_response):
-    matches = EVENT_PATTERN.findall(raw_response or "")
-    return [
-        {"channel": channel.strip(), "start_time": float(start), "end_time": float(end)}
-        for channel, start, end in matches
-    ]
+    text = raw_response or ""
+    events = []
+    seen = set()
+    for channel, start, end in EVENT_PATTERN.findall(text) + LINE_EVENT_PATTERN.findall(text):
+        channel_name = _normalize_channel(channel)
+        start_time = float(start)
+        end_time = float(end)
+        key = (channel_name.upper(), start_time, end_time)
+        if not channel_name or key in seen:
+            continue
+        seen.add(key)
+        events.append(
+            {"channel": channel_name, "start_time": start_time, "end_time": end_time}
+        )
+    return events
 
 
 def write_file_metrics(out_dir, edf_path, rec_path, stem, model, raw_logs, ground_truth, negative_labels):
@@ -274,10 +300,13 @@ def run_eval(args):
                     api_key=planner.api_key,
                     base_url=planner.base_url,
                     model=planner.model,
+                    tool_names=DISCHARGE_TOOL_NAMES,
                 )
                 result = agent.run(user_question)
                 raw_response = result["response"]
                 parsed_events = parse_events(raw_response)
+                if not parsed_events:
+                    parsed_events = parse_events(result.get("raw_assistant") or "")
                 messages = agent.messages
                 error = None
             except Exception as exc:

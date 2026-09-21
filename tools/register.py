@@ -42,7 +42,7 @@ class FunctionRegistry:
             # Build the parameters JSON Schema
             properties = {}  # Dict to store parameter type and description
             required = []    # List of required parameter names
-            for p in parameters:
+            for p in parameters or []:
                 param_name = p["name"]
                 properties[param_name] = {
                     "type": p["type"],                # Parameter type
