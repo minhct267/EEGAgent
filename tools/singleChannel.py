@@ -8,6 +8,12 @@ from .polar import index2name, name2index
 from .register import function_register
 
 
+def _unique_sorted_channel_ids(name: List[str]):
+    # Unknown names still KeyError into the existing execution-error path.
+    ids = sorted({name2index[item] for item in name})
+    return ids, [index2name[i] for i in ids]
+
+
 class SingleChannelEEG(nn.Module):
     def __init__(self, cls, embed_dim=128, num_heads=4, max_len=256):
         super().__init__()
@@ -114,13 +120,12 @@ def eyemMuscleModel_OneSecond(name: List[str], start:int, end:int, config):
     fs = config['fs']
     N = end - start
     data = getRegisteredData(start, end, config)
-    ids = sorted([name2index[i] for i in name])
-    chs = [index2name[i] for i in ids]
+    ids, chs = _unique_sorted_channel_ids(name)
     infos = []
     for i in range(N):
         start_idx = i * fs
         end_idx = (i + 1) * fs
-        x = data[:, start_idx:end_idx]
+        x = data[ids, start_idx:end_idx]
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 
@@ -189,13 +194,12 @@ def seizureArtiBckgModel_OneSecond(name: List[str], start:int, end:int, config):
     fs = config['fs']
     N = end - start
     data = getRegisteredData(start, end, config)
-    ids = sorted([name2index[i] for i in name])
-    chs = [index2name[i] for i in ids]
+    ids, chs = _unique_sorted_channel_ids(name)
     infos = []
     for i in range(N):
         start_idx = i * fs
         end_idx = (i + 1) * fs
-        x = data[:, start_idx:end_idx]
+        x = data[ids, start_idx:end_idx]
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 
@@ -258,13 +262,12 @@ def seizureNormalModel_OneSecond(name: List[str], start:int, end:int, config):
     fs = config['fs']
     N = end - start
     data = getRegisteredData(start, end, config)
-    ids = sorted([name2index[i] for i in name])
-    chs = [index2name[i] for i in ids]
+    ids, chs = _unique_sorted_channel_ids(name)
     infos = []
     for i in range(N):
         start_idx = i * fs
         end_idx = (i + 1) * fs
-        x = data[:, start_idx:end_idx]
+        x = data[ids, start_idx:end_idx]
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 

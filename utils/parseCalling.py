@@ -130,30 +130,47 @@ def extract_invoke_calls(response):
     return calls
 
 
-def extract_tool_calls(response):
-    if not response:
-        return []
-
+def _scan_function_headers(response, log=True):
     tool_calls = []
+    failures = []
     seen = set()
     for match in FUNCTION_HEADER_RE.finditer(response):
         tool_name = match.group(1)
         args_str = extract_balanced_object(response, match.end())
         if args_str is None:
-            print(f"Parameter parsing failed: no JSON object after <ARGS> for {tool_name}")
+            if log:
+                print(f"Parameter parsing failed: no JSON object after <ARGS> for {tool_name}")
+            failures.append({
+                "name": tool_name,
+                "args": {},
+                "error": f"no JSON object after <ARGS> for {tool_name}",
+            })
             continue
         try:
             args = parse_tool_args(args_str)
         except Exception as exc:
             preview = args_str[:120].replace("\n", " ")
-            print(f"Parameter parsing failed for {tool_name}: {exc} | args={preview!r}")
+            if log:
+                print(f"Parameter parsing failed for {tool_name}: {exc} | args={preview!r}")
+            failures.append({
+                "name": tool_name,
+                "args": {},
+                "error": f"Parameter parsing failed for {tool_name}: {exc}",
+            })
             continue
         key = (tool_name, json.dumps(args, sort_keys=True, default=str))
         if key in seen:
             continue
         seen.add(key)
         tool_calls.append({"name": tool_name, "args": args})
+    return tool_calls, failures, seen
 
+
+def extract_tool_calls(response):
+    if not response:
+        return []
+
+    tool_calls, _, seen = _scan_function_headers(response)
     for call in extract_invoke_calls(response):
         key = (call["name"], json.dumps(call["args"], sort_keys=True, default=str))
         if key in seen:
@@ -161,6 +178,13 @@ def extract_tool_calls(response):
         seen.add(key)
         tool_calls.append(call)
     return tool_calls
+
+
+def extract_tool_call_failures(response):
+    if not response:
+        return []
+    _, failures, _ = _scan_function_headers(response, log=False)
+    return failures
 
 
 def has_config_parameter(func):

@@ -12,7 +12,11 @@ if str(PROJECT_ROOT) not in sys.path:
 os.chdir(PROJECT_ROOT)
 
 from TUEV_eval import parse_events  # noqa: E402
-from utils.parseCalling import extract_tool_calls, parse_tool_args  # noqa: E402
+from utils.parseCalling import (  # noqa: E402
+    extract_tool_call_failures,
+    extract_tool_calls,
+    parse_tool_args,
+)
 
 
 def expect(condition: bool, detail: str) -> None:
@@ -90,6 +94,21 @@ def main() -> None:
             {"channel": "FP2-F8", "start_time": 5.0, "end_time": 6.0},
         ],
         "MiniMax dashed TUEV events",
+    )
+
+    missing_args = (
+        "<FUNCTION> seizureArtiBckgModel_OneSecond\n"
+        "<ARGS>\n"
+        "not-an-object\n"
+    )
+    expect(extract_tool_calls(missing_args) == [], "Missing ARGS object yields no success calls")
+    missing_failures = extract_tool_call_failures(missing_args)
+    expect(len(missing_failures) == 1, "Missing ARGS object yields one failure")
+    expect(
+        missing_failures[0]["name"] == "seizureArtiBckgModel_OneSecond"
+        and missing_failures[0]["args"] == {}
+        and "no JSON object after <ARGS>" in missing_failures[0]["error"],
+        "Missing ARGS failure names seizureArtiBckgModel_OneSecond",
     )
     print("All parser checks passed.")
 

@@ -16,7 +16,7 @@ from planner_adapt import (
     tool_results_as_user,
 )
 from prompt import getSystemPrompt
-from utils.parseCalling import extract_tool_calls, has_config_parameter
+from utils.parseCalling import extract_tool_call_failures, extract_tool_calls, has_config_parameter
 from utils.messageMerge import messageMerge
 from RAG.embedder import BGEEmbedder
 from RAG.searcher import FaissSearcher
@@ -116,18 +116,40 @@ class EEGAgent:
         ):
             source = self.messages[-1].get("content") or response
         calls = extract_tool_calls(source)
-        if not calls and source != response:
+        failures = extract_tool_call_failures(source)
+        if not calls and not failures and source != response:
             calls = extract_tool_calls(response)
-        if not calls:
+            failures = extract_tool_call_failures(response)
+        if not calls and not failures:
             return False
 
+        failed_instruction = (
+            "The tool call failed. Revise the arguments to satisfy the tool constraints before calling again."
+        )
         function_return = []
+        for failure in failures:
+            function_return.append({
+                "name": failure["name"],
+                "args": failure.get("args") or {},
+                "return": {
+                    "error": failure["error"],
+                    "instruction": failed_instruction,
+                },
+            })
         for call in calls:
             function_name = call['name'].strip()
             args = call['args'].copy()
             function = function_register.get_function(function_name)
             if not function:
                 print(f"No function named {function_name}")
+                function_return.append({
+                    "name": function_name,
+                    "args": args,
+                    "return": {
+                        "error": f"No function named {function_name}",
+                        "instruction": failed_instruction,
+                    },
+                })
                 continue
 
             # Inject config when the tool signature expects it.

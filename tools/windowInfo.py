@@ -90,7 +90,7 @@ def compute_psd(name: List[str], start: int, end: int, config):
         band_power = {}
         for band_name, (low, high) in freq_bands.items():
             idx_band = np.logical_and(f >= low, f <= high)
-            integrate = getattr(np, "trapezoid", np.trapz)
+            integrate = getattr(np, "trapezoid", None) or getattr(np, "trapz")
             band_power[band_name] = "{:.2e}".format(integrate(Pxx[idx_band], f[idx_band]))
         psds[ch_name] = band_power
     return psds
