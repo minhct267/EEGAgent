@@ -95,6 +95,22 @@ def main() -> None:
         ],
         "MiniMax dashed TUEV events",
     )
+    from TUEV_eval import classify_answer, parse_events_detailed
+
+    canonical = parse_events("(fp1 - f7, 1, 2)\n(F7-FP1, 3, 4)")
+    expect(
+        canonical == [
+            {"channel": "FP1-F7", "start_time": 1.0, "end_time": 2.0},
+            {"channel": "FP1-F7", "start_time": 3.0, "end_time": 4.0},
+        ],
+        "Lowercase and reversed channels map onto TCP names",
+    )
+    valid, invalid = parse_events_detailed("(CZ-PZ, 1, 2)")
+    expect(valid == [], "Unknown channel is not scored")
+    expect(len(invalid) == 1 and invalid[0]["invalid_channel"] is True, "Unknown channel is flagged")
+    expect(classify_answer("No events found", [], False) == "no_events", "No-events status")
+    expect(classify_answer("", [], True) == "max_rounds", "Empty max-round status")
+    expect(classify_answer("(FP1-F7, 1, 2)", canonical[:1], True) == "tuples", "Tuples outrank max rounds")
 
     missing_args = (
         "<FUNCTION> seizureArtiBckgModel_OneSecond\n"

@@ -17,6 +17,7 @@ PARAM_RE = re.compile(
     r"<parameter\s+name=[\"'](\w+)[\"']\s*>(.*?)</parameter>",
     re.DOTALL | re.IGNORECASE,
 )
+AUTHORS_CALL_RE = re.compile(r"<FUNCTION>\s*(\w+)\s+<ARGS>\s*(\{.*?\})", re.DOTALL)
 FENCE_RE = re.compile(r"^```(?:json|python)?\s*|\s*```$", re.IGNORECASE)
 UNQUOTED_KEY_RE = re.compile(r"([{\[,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:")
 SINGLE_QUOTED_STRING_RE = re.compile(r"'([^'\\]*)'")
@@ -177,6 +178,19 @@ def extract_tool_calls(response):
             continue
         seen.add(key)
         tool_calls.append(call)
+    return tool_calls
+
+
+def extract_tool_calls_authors(response):
+    """The authors' parser (git acd2e6a): non-greedy {...} and strict json.loads."""
+    tool_calls = []
+    for tool_name, args_str in AUTHORS_CALL_RE.findall(response or ""):
+        try:
+            args = json.loads(args_str)
+        except Exception as exc:
+            print(f"Parameter parsing failed: {exc}")
+            continue
+        tool_calls.append({"name": tool_name, "args": args})
     return tool_calls
 
 

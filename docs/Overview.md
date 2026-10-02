@@ -1,6 +1,6 @@
 # EEGAgent at a glance
 
-EEGAgent is a planner-plus-toolbox system for EEG analysis. An LLM chooses tools, reads their scores, and writes a short answer (events, stages, or a report). Local models do the signal work. The LLM does not replace those models.
+EEGAgent is a planner-plus-toolbox system for EEG analysis. An LLM chooses tools, reads their scores, and writes a short answer. Local models do the signal work. The LLM does not replace those models.
 
 ```mermaid
 flowchart TB
@@ -19,10 +19,10 @@ flowchart TB
 
 ## Who talks to whom
 
-- **Planner** (`main.py` + `.env`): OpenAI-compatible chat to local Ollama or Ollama Cloud. It speaks the paper’s `<FUNCTION>` / `<ARGS>` loop, not native tool-calling.
-- **Toolbox** (`tools/`): load/preprocess EDF, window features, and small PyTorch detectors (normal/abnormal, coarse 10 s, 1 s seizure, artifact type, sleep, MDD).
-- **RAG** (`RAG/`): local `bge-m3` embeddings and a FAISS index over files in `RAG/docs`. This is the knowledge base, not the project `docs/` folder.
-- **Eval**: `TUEV_eval.py` runs the agent on official TUEV pairs; `TUEV_oracle_run.py` runs tools only; `Sleep_eval.py` / `MDD_eval.py` cover the other public tasks.
+- **Planner** (`main.py`, `.env`, `config/protocols/tuev_authors_v2.json`): OpenAI-compatible chat. The TUEV baseline speaks the authors' `<FUNCTION>` / `<ARGS>` loop. Tool results come back as a user turn. Generation stops at `<RETURN>`.
+- **Toolbox** (`tools/`): load and preprocess EDF, window features, and the PyTorch detectors.
+- **RAG** (`RAG/`): `bge-m3` embeddings and a FAISS index over `RAG/docs`. This is the knowledge base, not the project `docs/` folder.
+- **Eval**: `TUEV_eval.py` runs the agent. `TUEV_oracle_run.py` calls seizure tools on the same windows and scores them with `utils/tuev_metrics.py`. `Sleep_eval.py` and `MDD_eval.py` are not on the live agent path. Their loaders in `main.py` are commented out.
 
 ```mermaid
 flowchart LR
@@ -53,28 +53,29 @@ flowchart LR
 
 | Location | Role |
 | --- | --- |
-| `D:\Datasets\TUH-EEG\TUEV` and `TUAB` | External datasets. Read-only. |
+| `TUEV_DATA_DIR` in `.env` | Official TUEV eval split. Read-only. |
 | `data/` | Small in-repo samples for smoke tests. |
 | `tools/localModels/*.pth` | Detector weights. |
 | `RAG/docs`, `RAG/faiss.index` | Knowledge the agent can retrieve. |
-| `runs/` | Generated eval logs. Gitignored. Recreate with the eval scripts. |
-| `docs/` | Human runbook and this map. Not used at runtime. |
+| `runs/` | Generated eval logs. Gitignored. |
+| `docs/` | Runbook and notes. Not used at runtime. |
+| `config/protocols/` | Frozen TUEV protocol. |
 
 ## Three ways to check the system
 
 ```mermaid
 flowchart TD
-  smoke[Smoke: env, planner, embed, tools] --> ready[Ready to eval]
-  agentEval[Agent eval on TUEV windows] --> hit[Hit rate vs .rec]
-  oracle[Oracle: tools only, no LLM] --> ceiling[Tool ceiling under the same score]
+  smoke[Smoke: harness unit tests plus two TUEV files] --> ready[Ready to eval]
+  agentEval[Agent eval on TUEV windows] --> hit[Coverage hit rate and IoU hit rate]
+  oracle[Oracle: seizure tools only] --> ceiling[Tool ceiling under the same windows and scorer]
 ```
 
-1. **Smoke** — is Ollama up, is `bge-m3` answering, do tools load? See [Note.md](Note.md).
-2. **Agent eval** — the planner must pick tools and emit `(channel, start, end)` tuples. Scored against TUEV labels with overlap 0.7 after merging nearby reports.
-3. **Oracle** — same score, but the script calls the seizure tools itself. Use this to separate “the detector missed” from “the LLM did not call the right tool”.
+1. **Smoke** — `python scripts/baseline_smoke.py`. See [Note.md](Note.md).
+2. **Agent eval** — the planner emits `(channel, start, end)` tuples. Scored against merged `.rec` events. The historical coverage rule is unchanged. Scorer v2 also reports IoU > 0.7.
+3. **Oracle** — same windows and the same scorer. The script calls `seizureNormalModel_OneSecond` or `seizureArtiBckgModel_OneSecond` itself. That separates a detector miss from a planner miss. The threshold is a flag, 0.5 or 0.7.
 
-## Design that stays fixed
+## What stays fixed for a comparison
 
-The live path is XML ReAct, a discharge-tool subset for TUEV, and gated extras for MiniMax (tool results as a user turn) and Qwen3.8 (continue-after-tools). Those are runtime contracts, not leftovers from a one-off experiment.
+The baseline protocol is `tuev_authors_v2`: the authors' question, every registered tool, and one harness for every planner. Model-name branches no longer change the prompt or where tool results are written. Ablations are explicit flags (`--harness`, `--prompt`, `--rag`, `--think`).
 
-How to run and switch models: [Note.md](Note.md).
+How to run it: [Note.md](Note.md). The frozen numbers and the runs still to do: [baseline.md](baseline.md).

@@ -13,9 +13,14 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from llm_settings import get_planner_settings, load_env
+from llm_settings import get_planner_settings, load_env, ollama_loaded_context
 from main import EEGAgent
-from planner_adapt import DISCHARGE_TOOL_NAMES
+from tuev_protocol import (
+    apply_protocol_settings,
+    build_manifest,
+    resolve_protocol,
+    write_manifest,
+)
 from utils.tuev_metrics import score_predictions, write_file_outputs, write_global_outputs
 
 EVENT_PATTERN = re.compile(
@@ -27,8 +32,8 @@ LINE_EVENT_PATTERN = re.compile(
     re.MULTILINE,
 )
 
-DEFAULT_DATA_DIR = r"D:\Datasets\TUH-EEG\TUEV\v2.0.1\edf\eval"
-DEFAULT_OUT_DIR = "runs/tuev_agent_ollama"
+DEFAULT_DATA_DIR = "/home/nmduong/Data/datasets/TUH-EEG/TUEV/v2.0.1/edf/eval"
+DEFAULT_OUT_DIR = "runs/tuev_authors_v2"
 DEFAULT_CONFIG_PATH = "config/config.json"
 DEFAULT_SLEEP_SECONDS = 5.0
 
@@ -46,17 +51,12 @@ CHANNEL_MAP = {
     20: "C4-P4", 21: "P4-O2",
 }
 
-WINDOW_QUESTION = """Please find all epileptic seizures in this EEG between {start} seconds and {end} seconds.
-Check all channels. Inspect every second of this interval, starting at the beginning.
-Report a channel only when a 1-second seizure tool shows seiz as the top class and seiz >= 0.50.
-If consecutive seconds on the same channel meet that rule, return one merged line covering the full span.
-For each detected seizure, return exactly one line in this format:
-(channel_name, time_start, time_end)
-Example:
-(FP1-F7, 12.0, 14.0)
-(FP2-F8, 12.5, 13.5)
-If there are no seizures, write exactly: No events found
-Do not include any extra text, explanation, or commentary."""
+NO_EVENTS_RE = re.compile(r"no events found", re.IGNORECASE)
+_CANONICAL_CHANNELS = {name.upper(): name for name in CHANNEL_MAP.values()}
+_REVERSED_CHANNELS = {}
+for _canonical in CHANNEL_MAP.values():
+    _left, _right = _canonical.split("-")
+    _REVERSED_CHANNELS[f"{_right}-{_left}"] = _canonical
 
 
 def parse_file_list(raw: str | None) -> set[str] | None:
@@ -168,10 +168,37 @@ def load_ground_truth(pairs):
     return gt_data, negative_data
 
 
+def messages_jsonl_path(out_dir, stem):
+    return Path(out_dir) / stem / "messages" / f"{stem}.messages.jsonl"
+
+
+def load_message_index(out_dir, stem):
+    """Restore transcripts. The jsonl written per window is the source of truth."""
+    found = {}
+    path = messages_jsonl_path(out_dir, stem)
+    if path.exists():
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                found[record["candidate_index"]] = record.get("messages")
+        return found
+    snapshot = Path(out_dir) / stem / "messages" / f"{stem}.messages.json"
+    if not snapshot.exists():
+        return found
+    blob = json.loads(snapshot.read_text(encoding="utf-8"))
+    for candidate in blob.get("candidates") or []:
+        if candidate.get("messages"):
+            found[candidate["candidate_index"]] = candidate["messages"]
+    return found
+
+
 def load_resumed_logs(out_dir, stem):
     path = Path(out_dir) / stem / "agent_raw.jsonl"
     if not path.exists():
         return set(), []
+    messages = load_message_index(out_dir, stem)
     done = set()
     logs = []
     with path.open(encoding="utf-8") as handle:
@@ -179,8 +206,15 @@ def load_resumed_logs(out_dir, stem):
             if not line.strip():
                 continue
             record = json.loads(line)
-            record.setdefault("messages", None)
-            done.add(record["candidate_index"])
+            index = record["candidate_index"]
+            transcript = messages.get(index)
+            # A raw line with no saved transcript is run again. The file rewrite drops the stale line.
+            if transcript is None and not record.get("error"):
+                continue
+            record["messages"] = transcript
+            if index in done:
+                logs = [item for item in logs if item["candidate_index"] != index]
+            done.add(index)
             logs.append(record)
     return done, logs
 
@@ -193,26 +227,77 @@ def append_raw_log(out_dir, stem, log):
         handle.write(json.dumps(raw, ensure_ascii=False, default=str) + "\n")
 
 
+def append_messages_log(out_dir, stem, log):
+    path = messages_jsonl_path(out_dir, stem)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "candidate_index": log["candidate_index"],
+        "window": log.get("window"),
+        "question": log.get("question"),
+        "model": log.get("model"),
+        "messages": log.get("messages"),
+        "parsed_events": log.get("parsed_events"),
+        "invalid_events": log.get("invalid_events"),
+        "format_status": log.get("format_status"),
+        "error": log.get("error"),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
 def _normalize_channel(name):
-    return re.sub(r"\s+", "", name).strip()
+    return re.sub(r"\s+", "", name).strip().upper()
+
+
+def canonicalize_channel(name):
+    """Map case, spaces, and reversed TCP pairs onto CHANNEL_MAP names."""
+    cleaned = _normalize_channel(name)
+    if cleaned in _CANONICAL_CHANNELS:
+        return _CANONICAL_CHANNELS[cleaned], True
+    if cleaned in _REVERSED_CHANNELS:
+        return _REVERSED_CHANNELS[cleaned], True
+    return cleaned, False
+
+
+def parse_events_detailed(raw_response):
+    text = raw_response or ""
+    events = []
+    invalid = []
+    seen = set()
+    for channel, start, end in EVENT_PATTERN.findall(text) + LINE_EVENT_PATTERN.findall(text):
+        start_time = float(start)
+        end_time = float(end)
+        canonical, ok = canonicalize_channel(channel)
+        key = (canonical, start_time, end_time, ok)
+        if not canonical or key in seen:
+            continue
+        seen.add(key)
+        item = {"channel": canonical, "start_time": start_time, "end_time": end_time}
+        if ok:
+            events.append(item)
+        else:
+            item["invalid_channel"] = True
+            item["raw_channel"] = _normalize_channel(channel)
+            invalid.append(item)
+    return events, invalid
 
 
 def parse_events(raw_response):
-    text = raw_response or ""
-    events = []
-    seen = set()
-    for channel, start, end in EVENT_PATTERN.findall(text) + LINE_EVENT_PATTERN.findall(text):
-        channel_name = _normalize_channel(channel)
-        start_time = float(start)
-        end_time = float(end)
-        key = (channel_name.upper(), start_time, end_time)
-        if not channel_name or key in seen:
-            continue
-        seen.add(key)
-        events.append(
-            {"channel": channel_name, "start_time": start_time, "end_time": end_time}
-        )
+    events, _invalid = parse_events_detailed(raw_response)
     return events
+
+
+def classify_answer(text, events, stopped_by_max_rounds):
+    body = (text or "").strip()
+    if events:
+        return "tuples"
+    if not body:
+        return "max_rounds" if stopped_by_max_rounds else "empty"
+    if NO_EVENTS_RE.search(body):
+        return "no_events"
+    if stopped_by_max_rounds:
+        return "max_rounds"
+    return "unparseable"
 
 
 def write_file_metrics(out_dir, edf_path, rec_path, stem, model, raw_logs, ground_truth, negative_labels):
@@ -257,13 +342,93 @@ def print_aggregate(aggregate):
     print(f"Unverified report rate: {aggregate.get('unverified_report_rate', float('nan'))}")
 
 
+def _select_answer(raw_response, result):
+    events, invalid = parse_events_detailed(raw_response)
+    answer_text = raw_response or ""
+    fallback = (result or {}).get("raw_assistant") or ""
+    if not events and fallback and fallback != answer_text:
+        fallback_events, fallback_invalid = parse_events_detailed(fallback)
+        if fallback_events or not answer_text.strip():
+            events, invalid = fallback_events, fallback_invalid
+            answer_text = fallback
+    if not events and result and result.get("context_overflow"):
+        return events, invalid, "context_overflow"
+    stopped = bool(result and result.get("stopped_by_max_rounds") and not events)
+    return events, invalid, classify_answer(answer_text, events, stopped)
+
+
+def write_run_health(out_dir, planner):
+    """Per-run counts of answer status and harness events, plus the context Ollama loaded."""
+    status_counts = defaultdict(int)
+    event_counts = defaultdict(int)
+    windows = errors = calls = 0
+    max_prompt_tokens = 0
+    overflow_windows = []
+    truncated_windows = []
+    for raw_path in sorted(Path(out_dir).glob("*/agent_raw.jsonl")):
+        for line in raw_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            log = json.loads(line)
+            windows += 1
+            errors += bool(log.get("error"))
+            status_counts[log.get("format_status") or "unknown"] += 1
+            meta = log.get("result_meta") or {}
+            events = set(meta.get("harness_events") or [])
+            for event in events:
+                event_counts[event] += 1
+            window_id = f"{log.get('stem')}#{log.get('candidate_index')}"
+            if "context_overflow" in events:
+                overflow_windows.append(window_id)
+            if "context_truncated" in events:
+                truncated_windows.append(window_id)
+            for call in meta.get("calls") or []:
+                calls += 1
+                max_prompt_tokens = max(max_prompt_tokens, call.get("prompt_tokens") or 0)
+    health = {
+        "windows": windows,
+        "errors": errors,
+        "planner_calls": calls,
+        "format_status": dict(sorted(status_counts.items())),
+        "windows_with_event": dict(sorted(event_counts.items())),
+        "max_prompt_tokens": max_prompt_tokens,
+        "num_ctx_requested": planner.num_ctx,
+        "planner_api": planner.api,
+        "ollama_loaded_context": ollama_loaded_context(planner.base_url, planner.model)
+        if planner.api == "ollama_native" else None,
+        "context_overflow_windows": overflow_windows,
+        "context_truncated_windows": truncated_windows,
+    }
+    path = Path(out_dir) / "run_health.json"
+    path.write_text(json.dumps(health, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"Run health: windows={windows} errors={errors} max_prompt_tokens={max_prompt_tokens} "
+        f"loaded_ctx={health['ollama_loaded_context']} overflow={len(overflow_windows)} "
+        f"truncated={len(truncated_windows)} status={health['format_status']}"
+    )
+    return health
+
+
 def run_eval(args):
-    planner = get_planner_settings()
+    protocol = resolve_protocol(
+        name_or_path=args.protocol,
+        harness=args.harness,
+        prompt_mode=args.prompt,
+        rag=args.rag,
+        think=args.think,
+        seed=args.seed,
+    )
+    planner = apply_protocol_settings(protocol, get_planner_settings())
     pairs = find_rec_edf_pairs(args.data_dir, parse_file_list(args.file_list))
     if args.limit is not None:
         pairs = pairs[: args.limit]
     if not pairs:
         raise SystemExit(f"No paired .edf/.rec files found under {args.data_dir}")
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = build_manifest(protocol, planner, [pair["stem"] for pair in pairs], args.config)
+    write_manifest(out_dir / "manifest.json", manifest)
 
     questions = build_questions(pairs)
     ground_truth, negative_labels = load_ground_truth(pairs)
@@ -273,7 +438,10 @@ def run_eval(args):
 
     print(
         f"Evaluating {len(pairs)} files / {len(questions)} candidate windows "
-        f"with model={planner.model} out_dir={args.out_dir}"
+        f"protocol={protocol.name} harness={protocol.harness.name} prompt={protocol.prompt_mode} "
+        f"rag={'on' if protocol.rag_enabled else 'off'} seed={protocol.seed} "
+        f"think={protocol.reasoning_effort} model={planner.model} api={planner.api} "
+        f"num_ctx={planner.num_ctx} out_dir={args.out_dir}"
     )
 
     for pair in tqdm(pairs, desc="TUEV files"):
@@ -284,6 +452,9 @@ def run_eval(args):
             raw_path = Path(args.out_dir) / pair["stem"] / "agent_raw.jsonl"
             if raw_path.exists():
                 raw_path.unlink()
+            messages_path = messages_jsonl_path(args.out_dir, pair["stem"])
+            if messages_path.exists():
+                messages_path.unlink()
 
         pending = [item for item in file_questions if item["candidate_index"] not in done_indices]
         if args.resume and not pending:
@@ -291,7 +462,9 @@ def run_eval(args):
         for question in pending:
             if args.sleep > 0:
                 time.sleep(args.sleep)
-            user_question = WINDOW_QUESTION.format(start=round(question["x"]), end=round(question["y"]))
+            user_question = protocol.question_template.format(
+                start=round(question["x"]), end=round(question["y"])
+            )
             agent = None
             try:
                 agent = EEGAgent(
@@ -300,19 +473,24 @@ def run_eval(args):
                     api_key=planner.api_key,
                     base_url=planner.base_url,
                     model=planner.model,
-                    tool_names=DISCHARGE_TOOL_NAMES,
+                    tool_names=protocol.tool_names,
+                    harness=protocol.harness,
+                    prompt_mode=protocol.prompt_mode,
+                    rag_enabled=protocol.rag_enabled,
+                    rag_top_k=protocol.rag_top_k,
+                    sampling=protocol.sampling_overrides(),
                 )
-                result = agent.run(user_question)
+                result = agent.run(user_question, max_rounds=protocol.max_rounds)
                 raw_response = result["response"]
-                parsed_events = parse_events(raw_response)
-                if not parsed_events:
-                    parsed_events = parse_events(result.get("raw_assistant") or "")
+                parsed_events, invalid_events, format_status = _select_answer(raw_response, result)
                 messages = agent.messages
                 error = None
             except Exception as exc:
                 result = None
                 raw_response = ""
                 parsed_events = []
+                invalid_events = []
+                format_status = "empty"
                 messages = getattr(agent, "messages", None)
                 error = repr(exc)
                 print(f"{pair['stem']} window {question['candidate_index']} failed: {error}")
@@ -326,17 +504,22 @@ def run_eval(args):
                 "window": {"start": question["x"], "end": question["y"]},
                 "question": user_question,
                 "model": planner.model,
+                "protocol": protocol.name,
+                "harness": protocol.harness.name,
+                "prompt_mode": protocol.prompt_mode,
+                "seed": protocol.seed,
                 "raw_response": raw_response,
                 "parsed_events": parsed_events,
+                "invalid_events": invalid_events,
+                "format_status": format_status,
                 "result_meta": result,
-                "messages_file": str(
-                    Path(args.out_dir) / pair["stem"] / "messages" / f"{pair['stem']}.messages.json"
-                ),
+                "messages_file": str(messages_jsonl_path(args.out_dir, pair["stem"])),
                 "error": error,
                 "messages": messages,
             }
             file_logs.append(log)
             append_raw_log(args.out_dir, pair["stem"], log)
+            append_messages_log(args.out_dir, pair["stem"], log)
 
         write_file_metrics(
             args.out_dir,
@@ -351,6 +534,7 @@ def run_eval(args):
 
     aggregate = write_global_outputs(args.out_dir)
     print_aggregate(aggregate)
+    write_run_health(args.out_dir, planner)
     return aggregate
 
 
@@ -366,7 +550,7 @@ def main():
     parser.add_argument(
         "--out-dir",
         default=os.environ.get("TUEV_OUT_DIR", DEFAULT_OUT_DIR),
-        help="Output directory. Default does not overwrite runs/tuev_agent.",
+        help="Output directory. Defaults to runs/tuev_authors_v2 so runs/tuev_agent_ollama is left intact.",
     )
     parser.add_argument(
         "--file-list",
@@ -377,10 +561,16 @@ def main():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip candidate windows already recorded in agent_raw.jsonl.",
+        help="Skip candidate windows already recorded in agent_raw.jsonl and reload their transcripts.",
     )
     parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP_SECONDS, help="Seconds to wait before each new window.")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
+    parser.add_argument("--protocol", default="tuev_authors_v2", help="Protocol name or path to a protocol JSON file.")
+    parser.add_argument("--harness", choices=["authors_v1", "authors_v2"], default=None, help="Override the protocol harness.")
+    parser.add_argument("--prompt", choices=["authors", "strict"], default=None, help="authors: original question and all tools. strict: 0.50 question and discharge tools.")
+    parser.add_argument("--rag", choices=["on", "off"], default=None, help="Override protocol retrieval.")
+    parser.add_argument("--think", default=None, help="Reasoning effort override, for example none or medium.")
+    parser.add_argument("--seed", type=int, default=None, help="Sampling seed override.")
     args = parser.parse_args()
 
     pairs = find_rec_edf_pairs(args.data_dir, parse_file_list(args.file_list))

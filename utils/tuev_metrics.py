@@ -1,7 +1,12 @@
-"""Event-level TUEV scoring: merge reports, count GT hits, and audit unmatched episodes."""
+"""Event-level TUEV scoring: merge reports, count GT hits, and audit unmatched episodes.
+
+Coverage fields match the authors' scorer. Extra fields are the v2 metrics:
+best-report IoU, per-class recall, event precision, and zero-GT report counts.
+"""
 
 import json
 import math
+import random
 from pathlib import Path
 
 COUNT_KEYS = [
@@ -14,6 +19,25 @@ COUNT_KEYS = [
     "explicit_negative_reports",
     "unverified_reports",
 ]
+
+V2_COUNT_KEYS = [
+    "iou_hits",
+    "positive_overlapping_reports",
+    "zero_gt_files",
+    "zero_gt_reports",
+    "spsw_gt",
+    "spsw_hits",
+    "spsw_iou_hits",
+    "gped_gt",
+    "gped_hits",
+    "gped_iou_hits",
+    "pled_gt",
+    "pled_hits",
+    "pled_iou_hits",
+]
+
+CLASS_FIELDS = {1: "spsw", 2: "gped", 3: "pled"}
+IOU_HIT_THRESHOLD = 0.7
 
 
 def write_json(path, data):
@@ -60,7 +84,113 @@ def aggregate_summaries(summaries):
         result["thresholds"] = sorted(thresholds)
     if models:
         result["models"] = sorted(models)
+    result.update(aggregate_v2(summaries))
     return result
+
+
+def aggregate_v2(summaries):
+    if not summaries or not any("iou_hits" in summary for summary in summaries):
+        return {}
+    totals = {key: 0 for key in V2_COUNT_KEYS}
+    for summary in summaries:
+        for key in V2_COUNT_KEYS:
+            totals[key] += int(summary.get(key, 0))
+    total_gt = sum(int(summary.get("total_gt", 0)) for summary in summaries)
+    total_reports = sum(int(summary.get("total_reports", 0)) for summary in summaries)
+    hits = sum(int(summary.get("hits", 0)) for summary in summaries)
+    hit_rate = _finite_rate(hits, total_gt)
+    event_precision = _finite_rate(totals["positive_overlapping_reports"], total_reports)
+    v2 = {
+        **totals,
+        "iou_hit_rate": _finite_rate(totals["iou_hits"], total_gt),
+        "event_precision": event_precision,
+        "event_f1": _f1(event_precision, hit_rate),
+        "spsw_recall": _finite_rate(totals["spsw_hits"], totals["spsw_gt"]),
+        "gped_recall": _finite_rate(totals["gped_hits"], totals["gped_gt"]),
+        "pled_recall": _finite_rate(totals["pled_hits"], totals["pled_gt"]),
+        "spsw_iou_recall": _finite_rate(totals["spsw_iou_hits"], totals["spsw_gt"]),
+        "gped_iou_recall": _finite_rate(totals["gped_iou_hits"], totals["gped_gt"]),
+        "pled_iou_recall": _finite_rate(totals["pled_iou_hits"], totals["pled_gt"]),
+        "hit_rate_bootstrap_95": bootstrap_file_rate(
+            [int(summary.get("hits", 0)) for summary in summaries],
+            [int(summary.get("total_gt", 0)) for summary in summaries],
+        ),
+        "iou_hit_rate_bootstrap_95": bootstrap_file_rate(
+            [int(summary.get("iou_hits", 0)) for summary in summaries],
+            [int(summary.get("total_gt", 0)) for summary in summaries],
+        ),
+    }
+    return v2
+
+
+def _finite_rate(numerator, denominator):
+    if not denominator:
+        return float("nan")
+    return numerator / denominator
+
+
+def _f1(precision, recall):
+    if precision != precision or recall != recall or precision + recall == 0:
+        return float("nan") if precision != precision or recall != recall else 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
+def _percentile(sorted_values, fraction):
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = (len(sorted_values) - 1) * fraction
+    low = math.floor(position)
+    high = math.ceil(position)
+    if low == high:
+        return sorted_values[low]
+    weight = position - low
+    return sorted_values[low] * (1 - weight) + sorted_values[high] * weight
+
+
+def bootstrap_file_rate(numerators, denominators, draws=1000, seed=0):
+    """File-level bootstrap of a pooled rate. Files are resampled with replacement."""
+    count = len(numerators)
+    if count == 0:
+        return None
+    rng = random.Random(seed)
+    rates = []
+    for _ in range(draws):
+        numerator = 0
+        denominator = 0
+        for _pick in range(count):
+            index = rng.randrange(count)
+            numerator += numerators[index]
+            denominator += denominators[index]
+        if denominator > 0:
+            rates.append(numerator / denominator)
+    if not rates:
+        return None
+    rates.sort()
+    return {
+        "draws": len(rates),
+        "seed": seed,
+        "low": _percentile(rates, 0.025),
+        "high": _percentile(rates, 0.975),
+        "mean": sum(rates) / len(rates),
+    }
+
+
+def best_report_iou(gt, reports):
+    gt_length = gt["end"] - gt["start"]
+    best = 0.0
+    for report in reports:
+        if report["channel"] != gt.get("channel_name"):
+            continue
+        overlap = calculate_overlap(
+            [gt["start"], gt["end"]],
+            [report["start_time"], report["end_time"]],
+        )
+        union = gt_length + (report["end_time"] - report["start_time"]) - overlap
+        if union > 0:
+            best = max(best, overlap / union)
+    return best
 
 
 def calculate_overlap(box_a, box_b):
@@ -108,6 +238,9 @@ def merge_predictions(predictions, gap_threshold=1.0):
 
 def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7, gap_threshold=1.0):
     # Merge nearby reports on the same channel; a GT event hits if coverage >= threshold.
+    gt_events = list(gt_events or [])
+    negative_events = list(negative_events or [])
+    raw_predictions = list(raw_predictions or [])
     report_episodes = merge_predictions(raw_predictions, gap_threshold=gap_threshold)
     detected_gt = set()
 
@@ -173,6 +306,21 @@ def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7
     total_raw_preds = len(raw_predictions)
     total_preds = len(report_episodes)
     hits = len(detected_gt)
+    class_counts = {label: {"gt": 0, "hits": 0, "iou_hits": 0} for label in CLASS_FIELDS.values()}
+    iou_hit_indices = set()
+    for gt_index, gt in enumerate(gt_events):
+        label = CLASS_FIELDS.get(int(gt.get("class", -1)))
+        if label:
+            class_counts[label]["gt"] += 1
+            if gt_index in detected_gt:
+                class_counts[label]["hits"] += 1
+        if best_report_iou(gt, report_episodes) > IOU_HIT_THRESHOLD:
+            iou_hit_indices.add(gt_index)
+            if label:
+                class_counts[label]["iou_hits"] += 1
+    iou_hits = len(iou_hit_indices)
+    hit_rate = hits / total_gt if total_gt else float("nan")
+    event_precision = positive_overlapping_reports / total_preds if total_preds else float("nan")
 
     metrics = {
         "total_gt": total_gt,
@@ -194,7 +342,19 @@ def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7
         "strict_unmatched_report_rate": strict_unmatched_reports / total_preds if total_preds else float("nan"),
         "explicit_negative_report_rate": explicit_negative_reports / total_preds if total_preds else float("nan"),
         "unverified_report_rate": unverified_reports / total_preds if total_preds else float("nan"),
+        "iou_hits": iou_hits,
+        "iou_hit_rate": iou_hits / total_gt if total_gt else float("nan"),
+        "event_precision": event_precision,
+        "event_f1": _f1(event_precision, hit_rate),
+        "zero_gt_files": 0 if total_gt else 1,
+        "zero_gt_reports": 0 if total_gt else total_preds,
     }
+    for label, counts in class_counts.items():
+        metrics[f"{label}_gt"] = counts["gt"]
+        metrics[f"{label}_hits"] = counts["hits"]
+        metrics[f"{label}_iou_hits"] = counts["iou_hits"]
+        metrics[f"{label}_recall"] = _finite_rate(counts["hits"], counts["gt"])
+        metrics[f"{label}_iou_recall"] = _finite_rate(counts["iou_hits"], counts["gt"])
     return metrics, report_episodes, scored_report_episodes
 
 
@@ -213,6 +373,19 @@ def summarize_metrics(metrics, model):
         "strict_unmatched_reports": metrics["strict_unmatched_reports"],
         "explicit_negative_reports": metrics["explicit_negative_reports"],
         "unverified_reports": metrics["unverified_reports"],
+        "iou_hits": metrics.get("iou_hits", 0),
+        "positive_overlapping_reports": metrics.get("positive_overlapping_reports", 0),
+        "zero_gt_files": metrics.get("zero_gt_files", 0),
+        "zero_gt_reports": metrics.get("zero_gt_reports", 0),
+        "spsw_gt": metrics.get("spsw_gt", 0),
+        "spsw_hits": metrics.get("spsw_hits", 0),
+        "spsw_iou_hits": metrics.get("spsw_iou_hits", 0),
+        "gped_gt": metrics.get("gped_gt", 0),
+        "gped_hits": metrics.get("gped_hits", 0),
+        "gped_iou_hits": metrics.get("gped_iou_hits", 0),
+        "pled_gt": metrics.get("pled_gt", 0),
+        "pled_hits": metrics.get("pled_hits", 0),
+        "pled_iou_hits": metrics.get("pled_iou_hits", 0),
     }
 
 
@@ -247,6 +420,8 @@ def write_file_outputs(out_dir, stem, edf_path, rec_path, model, gt_events, nega
                 "model": log["model"],
                 "messages": log["messages"],
                 "parsed_events": log["parsed_events"],
+                "invalid_events": log.get("invalid_events", []),
+                "format_status": log.get("format_status"),
                 "error": log["error"],
             }
             for log in raw_logs

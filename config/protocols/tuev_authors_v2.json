@@ -1,0 +1,20 @@
+{
+  "name": "tuev_authors_v2",
+  "question_template": "Please find all epileptic seizures in this EEG between {start} seconds and {end} seconds. \nCheck all channels. For each detected seizure, return exactly one line in this format:\n(channel_name, time_start, time_end)\nDo not include any extra text, explanation, or commentary. \nEach line should correspond to one seizure event. List all events for all channels",
+  "tool_names": null,
+  "prompt_mode": "authors",
+  "max_rounds": 8,
+  "harness": "authors_v2",
+  "sampling": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "seed": 0,
+    "reasoning_effort": "none",
+    "num_ctx": 65536
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 3
+  }
+}

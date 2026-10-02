@@ -1,9 +1,14 @@
-"""Planner prompt and tool-result adaptations for MiniMax and Qwen3.8."""
+"""Harness flags and TUEV prompt rules.
+
+Tool-result placement, stop sequences, empty retries, and the final-answer
+turn come from a HarnessConfig. They are not selected by model name.
+"""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 DISCHARGE_TOOL_NAMES = (
     "normalAbnormalModel",
@@ -40,49 +45,94 @@ TOOL_RESULT_NOTES = {
     ),
 }
 
-MINIMAX_NAME_RE = re.compile(r"minimax", re.IGNORECASE)
-QWEN38_NAME_RE = re.compile(r"qwen3\.8", re.IGNORECASE)
 DISABLED_THINKING = frozenset({"", "none", "off", "disabled"})
 
 
-def is_minimax_planner(model: str | None) -> bool:
-    return bool(model and MINIMAX_NAME_RE.search(model))
+@dataclass(frozen=True)
+class HarnessConfig:
+    """Loop behavior shared by every planner under one protocol."""
+
+    name: str
+    tool_result_role: str
+    stop: tuple
+    empty_retry: bool
+    force_final: bool
+    # "authors": the original regex + json.loads, bad calls dropped silently.
+    # "repaired": lenient ARGS parsing, and bad or unknown calls are returned as errors.
+    tool_calls: str
 
 
-def is_qwen38_planner(model: str | None) -> bool:
-    return bool(model and QWEN38_NAME_RE.search(model))
+HARNESS_AUTHORS_V2 = HarnessConfig(
+    name="authors_v2",
+    tool_result_role="user",
+    stop=("<RETURN>",),
+    empty_retry=True,
+    force_final=True,
+    tool_calls="repaired",
+)
+HARNESS_AUTHORS_V1 = HarnessConfig(
+    name="authors_v1",
+    tool_result_role="assistant",
+    stop=(),
+    empty_retry=False,
+    force_final=False,
+    tool_calls="authors",
+)
+HARNESSES = {
+    "authors_v2": HARNESS_AUTHORS_V2,
+    "v2": HARNESS_AUTHORS_V2,
+    "authors_v1": HARNESS_AUTHORS_V1,
+    "v1": HARNESS_AUTHORS_V1,
+}
+
+
+def resolve_harness(name: str | None) -> HarnessConfig:
+    key = (name or "authors_v2").strip()
+    if key not in HARNESSES:
+        known = ", ".join(sorted({"authors_v1", "authors_v2"}))
+        raise ValueError(f"Unknown harness {name!r}. Choose from: {known}.")
+    return HARNESSES[key]
 
 
 def thinking_is_disabled(reasoning_effort: str | None) -> bool:
     return (reasoning_effort or "").strip().lower() in DISABLED_THINKING
 
 
-def preserve_planner_reasoning(model: str | None, reasoning_effort: str | None = None) -> bool:
-    """Keep think blocks in history only when the planner is actually thinking."""
-    if is_minimax_planner(model):
-        return True
-    if is_qwen38_planner(model):
-        return not thinking_is_disabled(reasoning_effort)
-    return False
+def preserve_planner_reasoning(model: str | None = None, reasoning_effort: str | None = None) -> bool:
+    """Keep think blocks in history only when thinking is enabled."""
+    del model
+    return not thinking_is_disabled(reasoning_effort)
 
 
-def tool_results_as_user(model: str | None) -> bool:
-    """Show MiniMax tool output as a new user turn so it is not treated as self-talk."""
-    return is_minimax_planner(model)
+def truncate_at_stop(text: str | None, stops: tuple | list | None) -> tuple[str, bool]:
+    """Drop text at the first stop marker so a simulated tool return is not stored."""
+    body = text or ""
+    if not body or not stops:
+        return body, False
+    cut = None
+    for stop in stops:
+        if not stop:
+            continue
+        index = body.find(stop)
+        if index != -1 and (cut is None or index < cut):
+            cut = index
+    if cut is None:
+        return body, False
+    return body[:cut].rstrip(), True
 
 
-def continue_after_tools(model: str | None) -> bool:
-    """Qwen3.8 often emits an empty turn after tool merge; ask it to continue."""
-    return is_qwen38_planner(model)
+EMPTY_RETRY_MESSAGE = (
+    "The previous model turn was empty. Using the tool results already "
+    "in this conversation, write the final answer now. If you still need "
+    "a tool, emit <FUNCTION>/<ARGS> with valid JSON."
+)
 
-
-CONTINUE_AFTER_TOOLS = (
-    "Continue from the tool results already in this conversation. "
-    "If you still need to inspect other seconds in the asked interval, emit more "
-    "<FUNCTION>/<ARGS> calls with valid JSON. "
-    "Report only channels where a 1-second tool has seiz as the top class and seiz >= 0.50. "
-    "Merge consecutive high-seiz seconds on the same channel into one tuple. "
-    "If none meet that threshold, write exactly: No events found"
+FORCE_FINAL_MESSAGE = (
+    "Stop calling tools. Using the tool results already in this conversation, "
+    "write the final answer now. For each detected seizure, return exactly one line:\n"
+    "(channel_name, time_start, time_end)\n"
+    "If there are no seizures, write exactly: No events found\n"
+    "Do not include any extra text."
 )
 
 
@@ -97,7 +147,9 @@ def filter_tool_schemas(schemas: list, names: tuple[str, ...] | list[str] | None
     return [item for item in schemas if item.get("function", {}).get("name") in allowed]
 
 
-def planner_tool_rules(model: str | None) -> str:
+def planner_tool_rules(model: str | None = None) -> str:
+    """Strict-prompt rules. The same text is used for every planner."""
+    del model
     shared = """
 Tool-result rules (must follow):
 - eyemMuscleModel_OneSecond only classifies artifact TYPE: Eye movement vs Muscle. It is not a signal-quality check and has no clean class. Never use it to veto seizure or discharge detections.
@@ -112,26 +164,6 @@ Tool-result rules (must follow):
 - Do not invent events just to fill the tuple format.
 - When localizing an interval [start, end], inspect the beginning of that interval first (including the first 10 seconds). If you subsample 1-second tools, cover beginning, middle, and end, plus any coarse 10-second window with high seiz.
 - Every <ARGS> object must be valid JSON: double-quoted keys and strings, no Python single quotes, no unquoted values.
+- Call tools only with the <FUNCTION> / <ARGS> XML format shown above. Do not emit OpenAI/native tool_calls.
 """
-    if is_minimax_planner(model):
-        return (
-            shared
-            + """
-MiniMax-M3 format:
-- Call tools only with the <FUNCTION> / <ARGS> XML format shown above. Do not use OpenAI/native tool_calls.
-- After tool results arrive, update the conclusion from the classifier scores. Do not keep a prior "artifact contamination" narrative if seizure or discharge scores remain high.
-"""
-        )
-    if is_qwen38_planner(model):
-        return (
-            shared
-            + """
-Qwen3.8 format:
-- Call tools only with the <FUNCTION> / <ARGS> XML format shown above.
-- Every <ARGS> object must be valid JSON with double-quoted keys and strings.
-- Do not emit OpenAI/native tool_calls.
-- Cover every integer second of the asked interval with 1-second tools before the final answer.
-- Prefer writing only tuple lines, or the exact sentence No events found.
-"""
-        )
     return shared

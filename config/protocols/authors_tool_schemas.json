@@ -1,0 +1,347 @@
+{
+  "commit": "acd2e6a66d47dd02b5e44959a6dd4a3835c710dd",
+  "schemas": [
+    {
+      "type": "function",
+      "function": {
+        "name": "healthMDDModel",
+        "description": "Analyze the probability of health and MDD in the EEG data between [start, end] seconds. Minimum segment length is 5 seconds. If the interval is longer than 5 seconds, the function splits it into consecutive 5-second segments and returns a list of probabilities for each segment. Probabilities can be averaged to get a subject-level assessment.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds"
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict[str, Any]]",
+          "description": "List of dictionaries with segment duration and probability of Health and MDD"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "normalAbnormalModel",
+        "description": "Analyze the probability of pathological normality and abnormality in the entire EEG record.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "returns": {
+          "type": "Dict[str, float]",
+          "description": "Probability of pathological normality and abnormality"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reflectData",
+        "description": "This function should only be called when no effective information can be obtained from other tools. Directly extract a 1-second segment of raw data.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "List of channel names to extract, e.g., ['FP1-F7', 'F7-T3']"
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds"
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds"
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "Dict[str, np.ndarray]",
+          "description": "A dictionary with channel names as keys and corresponding EEG data arrays as values"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "eyemMuscleModel_OneSecond",
+        "description": "Use this tool to classify the type of artifact (eye movement or muscle) in EEG signals within a specific short time window (typically 1 second). It should be called only when artifacts have already been detected or suspected. Input channels should be in bipolar format (e.g., 'FP1-F7' or 'F7-T3'), and the analysis duration must be short (1–10 seconds). The tool returns, for each second, the probability that the signal belongs to 'Eye movement' or 'Muscle artifact'.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "List of EEG channel pairs to analyze (e.g., ['FP1-F7', 'F7-T3']). If the user mentions a single channel like 'FP1–F7', wrap it in a list."
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds. Extract this from user query, e.g., 'from 10s'."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds. Extract this from user query, e.g., 'to 11s'. The interval should typically be 1 second."
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict]",
+          "description": "Each element in the list corresponds to one second of analysis. Each dictionary includes the time duration and, for each channel, the probabilities of 'Eye movement' and 'Muscle artifact'."
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "seizureArtiBckgModel_OneSecond",
+        "description": "Use this tool to analyze EEG signals and estimate the probability that a given channel segment (typically 1 second) belongs to one of three classes: 'Background', 'Artifact', or 'Seizure'. This is a fine-grained classifier suitable for second-level EEG inspection. Use it when the user asks questions like 'What type of activity is between 20 and 21 seconds in FP1-F7?' or 'Is this second more likely seizure or artifact?'.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "List of EEG channel pairs to analyze (e.g., ['FP1-F7', 'C3-P3']). Supports reversed order like 'F7-FP1'."
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds (e.g., 20)."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds (e.g., 21). The duration must not exceed 10 seconds; 1 second is recommended."
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict]",
+          "description": "A list where each item corresponds to one second of analyzed data. Each dictionary contains the time window and, for each channel, the probabilities of 'Background', 'Artifact', and 'Seizure'."
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "seizureNormalModel_OneSecond",
+        "description": "Compute the probability of seizure vs. non-seizure activity for each channel within a specified time window. The function processes the data in 1-second segments, and returns probabilities for each segment and each channel. The time interval between start and end must not exceed 10 seconds.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "Channels to analyze, e.g., ['FP1-F7', 'F7-T3']"
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds. Maximum allowed interval: 10 seconds."
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict]",
+          "description": "A list of dictionaries, one per 1-second segment. Each dictionary contains the segment duration and the seizure/non-seizure probabilities for each channel."
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sleepStageModel",
+        "description": "Predict 5-class sleep stages for a given EEG segment. The input segment should be at least 30 seconds long. This tool divides the segment into non-overlapping 30-second epochs, and returns the probabilityfor each of the 5 sleep stages ('W','N1','N2','N3','R') for each epoch. ",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "int",
+              "description": "Start time of the EEG segment in seconds."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time of the EEG segment in seconds."
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict[str, any]]",
+          "description": "A list of dictionaries, one per predicted segment. Each dictionary contains 'duration' as the time window string, and 'Prob' which is a dictionary of sleep stage probabilities, e.g., {'W': 0.1, 'N1': 0.2, 'N2': 0.5, 'N3': 0.1, 'R': 0.1}."
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "slowSeizBckgModel_TenSeconds",
+        "description": "The probability that the data analyzed between [start, end] seconds contains slow waves, epilepsy, and background activity.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds."
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "List[Dict]",
+          "description": "A list of dictionaries. Each dictionary represents 10 seconds of analyzed data."
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "compute_amplitude",
+        "description": "need end - start <= 60. Compute amplitude features (mean absolute, RMS, peak values) of specified EEG channels in a given time window.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "List of channel names to analyze, e.g., ['FP1-F7', 'F7-T3']"
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds."
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "Dict[str, Dict[str, float]]",
+          "description": "A dictionary where keys are channel names and values are dictionaries of amplitude features including: mean_abs, rms, max_val, min_val"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "compute_psd",
+        "description": "need end - start <= 60. Compute power spectral density (PSD) of specified EEG channels in a given time window and integrate by frequency bands.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "List[str]",
+              "description": "List of channel names to analyze, e.g., ['FP1-F7', 'F7-T3']"
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time in seconds."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time in seconds."
+            }
+          },
+          "required": [
+            "name",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "Dict[str, Dict[str, float]]",
+          "description": "A dictionary where keys are channel names and values are dictionaries of power values for each frequency band, unit: V²"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "compute_symmetry",
+        "description": "need end - start <= 60. Calculate the Pearson correlation coefficient between specified left and right channel pairs within a given time window to assess EEG signal symmetry.",
+        "constraints": "",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "channel_pairs": {
+              "type": "List[Tuple[str, str]]",
+              "description": "List of left-right channel pairs, e.g., ['FP1-F7', 'FP2-F8')]. "
+            },
+            "start": {
+              "type": "int",
+              "description": "Start time (in seconds)."
+            },
+            "end": {
+              "type": "int",
+              "description": "End time (in seconds)."
+            }
+          },
+          "required": [
+            "channel_pairs",
+            "start",
+            "end"
+          ]
+        },
+        "returns": {
+          "type": "object",
+          "description": "A dictionary with channel pairs as keys and Pearson correlation coefficients, Structural Similarity Index as values."
+        }
+      }
+    }
+  ]
+}

@@ -1,107 +1,100 @@
 # EEGAgent runbook
 
-Commands assume the repo root and conda env `bci`. Copy `.env.example` to `.env` before the first run. Do not commit `.env`.
+Commands assume the repo root and the conda env at `/data/nmduong/cache/conda/envs/bci` (`python` on that env). Copy `.env.example` to `.env` before the first run. Do not commit `.env`.
 
 ## Datasets
 
-Keep these local paths. The code reads them; it does not write into them.
+The code reads these paths. It does not write into them.
 
-- TUEV: `D:\Datasets\TUH-EEG\TUEV`
-- TUAB: `D:\Datasets\TUH-EEG\TUAB`
-- TUEV official eval split used by `TUEV_eval.py`: `D:\Datasets\TUH-EEG\TUEV\v2.0.1\edf\eval`
+- TUEV eval split used by `TUEV_eval.py`: `/home/nmduong/Data/datasets/TUH-EEG/TUEV/v2.0.1/edf/eval` (`TUEV_DATA_DIR` in `.env`). That directory is the official eval split, 159 paired `.edf` / `.rec` files.
+- TUAB is not set in `.env`. `load_MDD_edf` and `load_Sleep_edf` are commented out in `main.py`, so `Sleep_eval.py` and `MDD_eval.py` are not wired to the agent.
 
-A small sample EDF for smoke tests lives in the repo at `data/gped_049_a_6.edf`.
+A small sample EDF for smoke tests lives at `data/gped_049_a_6.edf`.
 
 ## Config
 
-Two layers. Change `.env` to switch models and eval paths. Change `config/config.json` only for signal priors (sample rate, filters, montage text).
-
 | File | What it controls |
 | --- | --- |
-| `.env` | Planner URL/model/key, embedding URL/model, TUEV data/output dirs, timeout, `num_ctx`, reasoning |
-| `config/config.json` | `fs`, bandpass/notch, similarity threshold, channel-layout and age priors |
+| `.env` | Planner URL, model, API, timeout, and the default sampling (`num_ctx` 65536, temperature 0.7, top_p 0.8, top_k 20, seed 0, reasoning `none`). `OLLAMA_PLANNER_API=ollama_native` calls `/api/chat`; Ollama's `/v1` ignores `num_ctx` and `top_k`. |
+| `config/protocols/authors_tool_schemas.json` | The tool schemas registered at `acd2e6a`, shown by the authors prompt. Regenerate with `python scripts/export_authors_tool_schemas.py`. |
+| `config/config.json` | Sample rate, bandpass, notch, RAG similarity threshold 0.6, channel and age priors |
+| `config/protocols/tuev_authors_v2.json` | The frozen TUEV question, tool set, harness, and sampling. Eval flags override this file. The file overrides `.env` sampling. |
 
-Current planner defaults (also in `.env.example`):
+`TUEV_OUT_DIR` defaults to `runs/tuev_authors_v2`. The previous local run stays in `runs/tuev_agent_ollama`.
 
-- Local: `OLLAMA_PLANNER_BASE_URL=http://127.0.0.1:11434/v1`, `OLLAMA_PLANNER_MODEL=qwen3.8:27b`
-- Embeddings stay local: `OLLAMA_EMBED_MODEL=bge-m3:latest` at `http://127.0.0.1:11434/v1`
-- TUEV: `TUEV_DATA_DIR` and `TUEV_OUT_DIR=runs/tuev_agent_ollama`
+## Baseline command
 
-## Switch the planner
+The full procedure, with checks, oracle, seeds, ablations, rescore, and the numbers to compare against, is in [baseline_run.md](baseline_run.md). Pass `--sleep 0` on long evals; the default is 5 seconds per window.
 
-Local Qwen3.8 (default):
+Authors' question, all tools, harness `authors_v2` (stop at `<RETURN>`, tool results as a user turn, one empty retry, one forced final turn), planner `qwen3.8:27b`, RAG `bge-m3:latest`, seed 0:
 
 ```
-OLLAMA_PLANNER_BASE_URL=http://127.0.0.1:11434/v1
-OLLAMA_PLANNER_API_KEY=ollama
-OLLAMA_PLANNER_MODEL=qwen3.8:27b
+python TUEV_eval.py --protocol tuev_authors_v2 --seed 0 --out-dir runs/tuev_authors_v2
 ```
 
-Ollama Cloud (MiniMax or a cloud Qwen tag): set `OLLAMA_PLANNER_BASE_URL` to `https://ollama.com/v1`, put the cloud key in `OLLAMA_PLANNER_API_KEY` or `OLLAMA_API_KEY`, and set `OLLAMA_PLANNER_MODEL` to the cloud tag.
+Ablations on the same code:
 
-Leave `OLLAMA_REASONING_EFFORT=none` unless you want the planner to keep think blocks.
+```
+python TUEV_eval.py --harness authors_v1 --file-list config/protocols/authors_235b_files.txt --out-dir runs/tuev_ablate_harness_v1
+python TUEV_eval.py --prompt strict --file-list config/protocols/authors_235b_files.txt --out-dir runs/tuev_ablate_strict
+python TUEV_eval.py --rag off --file-list config/protocols/authors_235b_files.txt --out-dir runs/tuev_ablate_rag_off
+python TUEV_eval.py --think medium --file-list config/protocols/authors_235b_files.txt --out-dir runs/tuev_ablate_think_medium
+```
 
-## Tests (no TUEV loop)
+`--harness authors_v1` is the original loop: results spliced into the assistant message, no stop sequence, no empty retry, no forced final turn, and the authors' parser, which skips bad calls without feedback. `--prompt strict` is the 0.50 question, the nine discharge tools, the rewritten tool text, and `<NOTE>` lines after tool results. Sampling stays the protocol sampler unless `--seed` or `--think` is set.
 
-Parser only (no network):
+`--resume` skips windows already in `agent_raw.jsonl` and reloads transcripts from `messages/<stem>.messages.jsonl`. A window whose transcript was not saved is run again.
+
+## Tests
+
+Parser, scorer, and harness (no TUEV files):
 
 ```
 python scripts/test_parse_calling.py
+python scripts/test_tuev_metrics.py
+python scripts/test_harness.py
 ```
 
-Smoke tests use `--phase`. Default is `env,planner,embed,rag,tools` (no full agent call).
+Two-file live check (manifest, stop sequence, native API and loaded context, authors' tool text, no `<NOTE>`, resume, token counts):
+
+```
+python scripts/baseline_smoke.py
+```
+
+Component smoke, without the TUEV loop:
 
 ```
 python scripts/smoke_test.py
-python scripts/smoke_test.py --phase planner
-python scripts/smoke_test.py --phase embed
-python scripts/smoke_test.py --phase env,planner,embed,rag,tools
 python scripts/smoke_test.py --phase all
 ```
 
-`--phase all` includes one agent turn on `data/gped_049_a_6.edf`.
-
-## Evaluate
-
-List TUEV eval pairs without calling the model:
+List pairs without calling the model:
 
 ```
 python TUEV_eval.py --mode list
 ```
 
-Two-file smoke eval (writes under `runs/`, gitignored):
+## Oracle
+
+Same windows as the agent (`round` of each merged annotation span) and the same scorer. A second is kept when `seiz` is at least the threshold. Run both tools at 0.5 and at 0.7:
 
 ```
-python TUEV_eval.py --limit 2
+python TUEV_oracle_run.py --rule both --threshold 0.5 --threshold 0.7 --out-dir runs/tuev_oracle
 ```
 
-Named files:
+One tool at the authors' old default:
 
 ```
-python TUEV_eval.py --file-list bckg_000_a_,gped_010_a_1 --out-dir runs/tuev_agent_ollama
+python TUEV_oracle_run.py --rule seizNormal --threshold 0.7 --out-dir runs/tuev_oracle_seizNormal_t0.7
 ```
 
-Full official eval split (uses `TUEV_DATA_DIR` / `TUEV_OUT_DIR`):
+## Re-score a saved run
 
 ```
-python TUEV_eval.py
-```
-
-`--resume` skips windows already stored in that run’s `agent_raw.jsonl`.
-
-Tool-only oracle (no LLM; same event-level score as the agent):
-
-```
-python TUEV_oracle_run.py --data-dir D:\Datasets\TUH-EEG\TUEV\v2.0.1\edf\eval --out-dir runs/tuev_oracle_run
-```
-
-Other eval scripts (need their local eval data under `eval/`):
-
-```
-python Sleep_eval.py
-python MDD_eval.py
+python scripts/rescore_tuev.py --run-dir runs/tuev_agent_ollama --out runs/tuev_agent_ollama/metrics_v2.json
+python scripts/rescore_tuev.py --git acd2e6a --git-prefix runs/tuev_agent --out runs/rescore/acd2e6a/metrics_v2.json
 ```
 
 ## Outputs
 
-Eval writes generated logs and scores under `runs/`. That directory is gitignored and is recreated on the next eval. Do not treat `runs/` as source of truth for the codebase.
+Each run directory gets `manifest.json` (git commit, protocol, prompt hash, planner API, model digest, FAISS, chunk, and authors' tool-schema hashes, file list), `run_health.json` (answer status counts, harness events, largest prompt, loaded context, overflowed or truncated windows), and per-file `agent_raw.jsonl` plus `messages/<stem>.messages.jsonl`. `runs/` is gitignored.

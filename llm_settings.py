@@ -7,7 +7,9 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -20,7 +22,11 @@ DEFAULT_PLANNER_MODEL = "qwen3.8:27b"
 DEFAULT_PLANNER_API_KEY = "ollama"
 DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_REASONING_EFFORT = "none"
-DEFAULT_NUM_CTX = 16384
+DEFAULT_NUM_CTX = 65536
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TOP_P = 0.8
+DEFAULT_TOP_K = 20
+DEFAULT_SEED = 0
 DEFAULT_EMBED_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_EMBED_API_KEY = "ollama"
 DEFAULT_EMBED_MODEL = "bge-m3:latest"
@@ -34,6 +40,11 @@ class PlannerSettings:
     timeout: float
     reasoning_effort: str
     num_ctx: int
+    temperature: float
+    top_p: float
+    top_k: int
+    seed: int
+    api: str = "openai"
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,12 @@ def is_local_base_url(base_url: str) -> bool:
     return "127.0.0.1" in lowered or "localhost" in lowered
 
 
+def default_planner_api(base_url: str) -> str:
+    """Ollama hosts use the native /api/chat. Its /v1 endpoint ignores options such as num_ctx."""
+    lowered = (base_url or "").lower()
+    return "ollama_native" if is_local_base_url(lowered) or "ollama.com" in lowered else "openai"
+
+
 def model_name_available(model_ids: list[str], model: str) -> bool:
     """Match Ollama tags with or without :latest."""
     names = {item for item in model_ids if item}
@@ -95,6 +112,9 @@ def get_planner_settings() -> PlannerSettings:
         or os.environ.get("OLLAMA_API_KEY", "").strip()
         or DEFAULT_PLANNER_API_KEY
     )
+    api = os.environ.get("OLLAMA_PLANNER_API", "").strip() or default_planner_api(base_url)
+    if api not in {"ollama_native", "openai"}:
+        raise RuntimeError(f"OLLAMA_PLANNER_API must be ollama_native or openai, got {api!r}.")
     return PlannerSettings(
         api_key=api_key,
         base_url=base_url,
@@ -104,6 +124,11 @@ def get_planner_settings() -> PlannerSettings:
         reasoning_effort=os.environ.get("OLLAMA_REASONING_EFFORT", DEFAULT_REASONING_EFFORT).strip()
         or DEFAULT_REASONING_EFFORT,
         num_ctx=_env_int("OLLAMA_NUM_CTX", DEFAULT_NUM_CTX),
+        temperature=_env_float("OLLAMA_TEMPERATURE", DEFAULT_TEMPERATURE),
+        top_p=_env_float("OLLAMA_TOP_P", DEFAULT_TOP_P),
+        top_k=_env_int("OLLAMA_TOP_K", DEFAULT_TOP_K),
+        seed=_env_int("OLLAMA_SEED", DEFAULT_SEED),
+        api=api,
     )
 
 
@@ -120,19 +145,132 @@ def get_embed_settings() -> EmbedSettings:
 
 
 def planner_extra_body(settings: PlannerSettings | None = None) -> dict:
-    """Chat extras for Ollama. Older servers ignore unknown fields."""
+    """Chat extras for Ollama. Only the native API applies `options`; /v1 ignores them."""
     used = settings or get_planner_settings()
     body: dict = {"reasoning_effort": used.reasoning_effort}
     if used.reasoning_effort.strip().lower() in {"none", "off", "disabled"}:
         body["think"] = False
+    options: dict = {
+        "temperature": used.temperature,
+        "top_p": used.top_p,
+        "top_k": used.top_k,
+        "seed": used.seed,
+    }
     if used.num_ctx > 0:
-        body["options"] = {"num_ctx": used.num_ctx}
+        options["num_ctx"] = used.num_ctx
+    body["options"] = options
     return body
 
 
-def planner_client() -> OpenAI:
-    settings = get_planner_settings()
+class ContextOverflowError(RuntimeError):
+    """Ollama refused a prompt longer than num_ctx (sent with truncate=false)."""
+
+    def __init__(self, message: str, prompt_tokens: int | None, num_ctx: int | None):
+        super().__init__(message)
+        self.prompt_tokens = prompt_tokens
+        self.num_ctx = num_ctx
+
+
+def ollama_root(base_url: str) -> str:
+    root = (base_url or "").rstrip("/")
+    return root[: -len("/v1")] if root.endswith("/v1") else root
+
+
+class OllamaNativeClient:
+    """`client.chat.completions.create()` over Ollama's /api/chat.
+
+    /v1 drops `options`, so num_ctx and top_k never reach the runner there, and an
+    over-long prompt silently loses its oldest messages. This client sends options
+    natively and sets truncate=false so an overflow raises ContextOverflowError.
+    """
+
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS):
+        self.root = ollama_root(base_url)
+        self.timeout = timeout
+        self.headers = {"Content-Type": "application/json"}
+        if api_key and api_key != DEFAULT_PLANNER_API_KEY:
+            self.headers["Authorization"] = f"Bearer {api_key}"
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+    def create(self, model, messages, timeout=None, temperature=None, top_p=None, seed=None,
+               stop=None, max_tokens=None, extra_body=None, **_unused):
+        extra = dict(extra_body or {})
+        options = dict(extra.pop("options", None) or {})
+        for key, value in (("temperature", temperature), ("top_p", top_p), ("seed", seed)):
+            if value is not None:
+                options[key] = value
+        if stop:
+            options["stop"] = list(stop)
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        effort = str(extra.get("reasoning_effort") or "").strip().lower()
+        think = extra.get("think")
+        if think is None:
+            if effort in {"", "none", "off", "disabled"}:
+                think = False
+            else:
+                think = effort if effort in {"low", "medium", "high", "xhigh"} else True
+        payload = {
+            "model": model,
+            "messages": [{"role": item["role"], "content": item.get("content") or ""} for item in messages],
+            "stream": False,
+            "think": think,
+            "truncate": False,
+            "options": options,
+        }
+        response = httpx.post(
+            f"{self.root}/api/chat",
+            json=payload,
+            headers=self.headers,
+            timeout=timeout or self.timeout,
+        )
+        if response.status_code != 200:
+            text = response.text
+            if "exceed_context_size" in text or "exceeds the available context size" in text:
+                prompt = re.search(r'n_prompt_tokens\\?"\s*:\s*(\d+)', text)
+                ctx = re.search(r'n_ctx\\?"\s*:\s*(\d+)', text)
+                raise ContextOverflowError(
+                    text[:300],
+                    int(prompt.group(1)) if prompt else None,
+                    int(ctx.group(1)) if ctx else None,
+                )
+            raise RuntimeError(f"Ollama /api/chat returned {response.status_code}: {text[:300]}")
+        data = response.json()
+        message = data.get("message") or {}
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content=message.get("content") or "", reasoning=message.get("thinking")),
+                finish_reason=data.get("done_reason"),
+            )],
+            usage=SimpleNamespace(
+                prompt_tokens=data.get("prompt_eval_count"),
+                completion_tokens=data.get("eval_count"),
+            ),
+        )
+
+
+def make_planner_client(settings: PlannerSettings):
+    if settings.api == "ollama_native":
+        return OllamaNativeClient(settings.base_url, settings.api_key, settings.timeout)
     return OpenAI(api_key=settings.api_key, base_url=settings.base_url, timeout=settings.timeout)
+
+
+def planner_client():
+    return make_planner_client(get_planner_settings())
+
+
+def ollama_loaded_context(base_url: str, model: str) -> int | None:
+    """context_length of a model currently loaded by Ollama, or None."""
+    try:
+        listed = httpx.get(f"{ollama_root(base_url)}/api/ps", timeout=10.0).json().get("models") or []
+    except (httpx.HTTPError, ValueError):
+        return None
+    bare = model.replace(":latest", "")
+    for item in listed:
+        names = {(item.get("name") or "").replace(":latest", ""), (item.get("model") or "").replace(":latest", "")}
+        if bare in names:
+            return item.get("context_length")
+    return None
 
 
 def embed_client() -> OpenAI:
@@ -162,7 +300,7 @@ def planner_is_ready() -> tuple[bool, str]:
     """Check that the planner endpoint is up and the configured model is listed."""
     settings = get_planner_settings()
     try:
-        models = planner_client().models.list()
+        models = OpenAI(api_key=settings.api_key, base_url=settings.base_url, timeout=settings.timeout).models.list()
         model_ids = [item.id for item in models.data]
     except Exception as exc:
         return False, f"Planner is not reachable at {settings.base_url}: {exc}"
