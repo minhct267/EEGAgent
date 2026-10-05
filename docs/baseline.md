@@ -1,99 +1,87 @@
 # TUEV baseline
 
-Protocol id: `tuev_authors_v2` in [config/protocols/tuev_authors_v2.json](../config/protocols/tuev_authors_v2.json).
+Protocol `tuev_authors_v2`. Planner `qwen3.8:27b` on local Ollama. This is the run to compare later planners against. It is not the paper's 69.30% / 44.77%, and it is not `runs/tuev_agent_ollama`.
 
-This is the run to compare later planners against. It is not the paper's 69.30% / 44.77%, and it is not the already finished `runs/tuev_agent_ollama` folder. That folder used a different question, a nine-tool subset, model-specific loop patches, and a context that was not the one it asked for (see Context below). Its numbers are in the table below as the confounded local run.
+How the three pipelines differ: [pipelines.md](pipelines.md). Full tables: [baseline_results.md](baseline_results.md).
 
 ## Frozen settings
 
+From [config/protocols/tuev_authors_v2.json](../config/protocols/tuev_authors_v2.json) and the seed-0 manifest in `runs/tuev_authors_v2/manifest.json`.
+
 | Piece | Setting |
 | --- | --- |
-| Question | Authors' text from git `acd2e6a`. Times are `round(start)` and `round(end)`. |
-| Tools | Every registered tool. The prompt shows the schemas the authors' commit registered, frozen in [config/protocols/authors_tool_schemas.json](../config/protocols/authors_tool_schemas.json) by `scripts/export_authors_tool_schemas.py`. |
-| System prompt | Authors' prompt from `acd2e6a`, including its original wording. RAG lines are appended the same way, unlabeled, top 3, cosine at least 0.6. |
-| Tool results | Authors' `<FUNCTION>/<ARGS>/<RETURN>/<RESULT>` block with no `<NOTE>` lines. Notes are a `--prompt strict` feature. |
-| Harness | `authors_v2` for every planner: stop at `<RETURN>`, tool-result block as a new user turn, one empty-reply retry, one tool-free turn if round 8 is reached. Bad ARGS and unknown tool names are returned to the model as errors. |
-| Planner | `qwen3.8:27b` through Ollama's native `/api/chat` (`OLLAMA_PLANNER_API=ollama_native`). Thinking off (`think: false`). |
-| Sampling | temperature 0.7, top_p 0.8, top_k 20, seed 0. These match Qwen's non-thinking defaults. |
-| Context | `num_ctx` 65536, sent with `truncate: false`. A prompt that does not fit ends the window with status `context_overflow`. A call at or above 95% of the cap is flagged `context_warning`. A prompt count lower than an earlier call in the same window is flagged `context_truncated`. |
-| Retrieval | Ollama `bge-m3:latest` and the existing 1,024-d FAISS index. Query, chunks, and scores are stored on the window. |
-| Scorer | Coverage at 0.7, unchanged, plus IoU > 0.7, per-class recall, event precision and F1, zero-GT reports, file-level bootstrap 95% interval (1,000 draws, seed 0). |
+| Question | Authors' text. Times are `round(start)` and `round(end)` |
+| Tools | Every registered tool. The prompt shows the `acd2e6a` schemas |
+| Tool results | `<FUNCTION>` / `<ARGS>` / `<RETURN>` / `<RESULT>` as a user turn. No `<NOTE>` |
+| Harness | `authors_v2`. Stop `["<RETURN>"]`. One empty retry. One tool-free turn after round 8. Bad calls are returned as errors |
+| Planner | `qwen3.8:27b`, Q4_K_M, family `qwen35`, 27.3B. API `ollama_native`. Digest `22130167c4c20e20c7b71454612966ca8e8171e9b3cc8ab6ce8aa6cbfec79643` |
+| Sampling | temperature 0.7, top_p 0.8, top_k 20, seed 0, `reasoning_effort` `none` |
+| Context | `num_ctx` 65536. The run loaded 65536. Overflow and truncation lists are empty |
+| Retrieval | `bge-m3:latest`, F16, top 3, cosine at least 0.6 |
+| Scorer | Coverage at 0.7, plus IoU > 0.7, per-class counts, event F1, zero-GT reports, file-level bootstrap (1,000 draws, seed 0) |
+| Git | Full split, seed 0: `6eed8ef`, dirty. Seeds 1–2 and the four ablations: `9a81722`, clean |
 
-Each run writes `manifest.json` with the git commit, protocol, prompt hash, planner API, planner and embedder digests, and the SHA-256 of `RAG/faiss.index`, `RAG/chunks.pkl`, and the frozen authors' tool schemas. At the end it writes `run_health.json`: answer status counts, harness events, errors, the largest prompt, the context Ollama actually loaded, and the windows that overflowed or were truncated.
+`runs/tuev_authors_v2/run_health.json`: 512 windows, 3 errors, all `ReadTimeout`, loaded context 65536, `planner_api` `ollama_native`. The three failed windows are empty answers, so they add no hits. The 23 positive events inside those windows are current misses (18 class 2 on `gped_052_a_`, 2 class 2 on `spsw_023_a_1`, 3 class 3 on `pled_006_a_2`). If a rerun hit all 23 and left every other event unchanged, coverage would be 1,888/2,736 = 69.01%.
 
-### Why the native API
+## Headline
 
-Ollama's OpenAI-compatible `/v1` endpoint (checked on Ollama 0.35.0) ignores `extra_body.options`. A `/v1` request with `num_ctx` 65536 left the model at the server default of 32,768 tokens, and `top_k` was not applied either. Above that size Ollama silently drops the oldest messages. A 48k-token test prompt came back as 46 prompt tokens, and the model no longer saw the first user turn. `/api/chat` does load the requested context (65,536 confirmed in `/api/ps`, 20.5 GB on the two L4s), and with `truncate: false` it returns HTTP 400 instead of dropping messages.
+Coverage is the scorer in the released code: same channel, merged overlaps cover at least 70% of the event. Extra predicted time is not penalized. IoU > 0.7 is the best same-channel report. The paper's sentence uses IoU. These two columns are not interchangeable.
 
-Ollama strips the stop string from both APIs, so `stop_hit` stays 0 on Ollama. The stop sequence still works; the smoke check confirms no assistant turn contains `<RETURN>`. `stop_hit` only fires on a server that echoes the stop text.
-
-## Differences from the authors' 235B run
-
-The protocol keeps the authors' question, prompt, tool text, and result blocks. These differences remain and should be stated next to any 235B comparison:
-
-| Difference | Effect |
-| --- | --- |
-| Channel-index fix in the three 1-second tools | At `acd2e6a`, `eyemMuscleModel_OneSecond`, `seizureArtiBckgModel_OneSecond`, and `seizureNormalModel_OneSecond` scored `data[:, ...]`, the first rows of the montage, then labeled row `j` with the `j`-th requested channel. Unless the request was a prefix of the montage order (for example all 22 channels), a channel's probabilities came from a different channel. The current tools score `data[ids, ...]`, with duplicates removed. The 235B run therefore saw different tool outputs for subset requests. |
-| Eye-vs-muscle key | The authors' key `Eyem movement` is now `Eye movement`. |
-| Harness `authors_v2` | Stop sequence, user-turn results, empty retry, forced final turn, and error feedback for bad calls. The authors' run used none of these. `--harness authors_v1` restores the authors' splice, parser (non-greedy regex and `json.loads`), and silent skipping of bad calls. |
-| Planner backend | DashScope `qwen3-235b-a22b` with `enable_thinking=false`, against local `qwen3.8:27b` Q4_K_M. |
-
-## What E0 already measured
-
-Re-scored with `scripts/rescore_tuev.py` on 2 Oct 2026. Coverage hits match the metrics stored in each `agent_predictions.jsonl` (`sanity: true`).
-
-The authors' run is git `acd2e6a:runs/tuev_agent` (`qwen3-235b-a22b`, 36 files, 120 windows). The local run is `runs/tuev_agent_ollama` (`qwen3.8:27b`). The 36-file rows use the same files and the same ground truth (447 positive events).
-
-| Run | Files | Coverage hits | IoU > 0.7 hits | Unmatched reports | Event F1 |
-| --- | --- | --- | --- | --- | --- |
-| Authors' 235B, `acd2e6a` | 36 | 330/447 = 73.83% (95% CI 60.4–83.9) | 146/447 = 32.66% | 506/814 = 62.16% | 0.500 |
-| Local qwen3.8, same 36 files | 36 | 260/447 = 58.17% (95% CI 45.5–68.9) | 122/447 = 27.29% | 423/694 = 60.95% | 0.467 |
-| Local qwen3.8, full eval split | 159 | 1,422/2,736 = 51.97% (95% CI 43.0–59.9) | 692/2,736 = 25.29% | 1,734/3,418 = 50.73% | 0.506 |
-
-Per-class coverage recall on the paired 36 files:
-
-| Class | Events | 235B | qwen3.8 |
+| Source | Files | Coverage | IoU > 0.7 |
 | --- | --- | --- | --- |
-| SPSW | 50 | 33 (66.0%) | 37 (74.0%) |
-| GPED | 230 | 190 (82.6%) | 146 (63.5%) |
-| PLED | 167 | 107 (64.1%) | 77 (46.1%) |
+| Paper text. Planner named there: Qwen3-235B. File count not stated | not stated | not stated | 69.30% hit rate; false rate 44.77%, denominator not stated |
+| Qwen3-235B, DashScope API, git `acd2e6a` | 36 | 330/447 = 73.83% (60.4–83.9) | 146/447 = 32.66% (19.4–44.6) |
+| Qwen3.8:27B, local Ollama, `tuev_authors_v2`, seed 0, same 36 files | 36 | 334/447 = 74.72% (64.7–84.4) | 137/447 = 30.65% (19.0–42.3) |
+| Qwen3.8:27B, local Ollama, `tuev_authors_v2`, seed 0, full eval split | 159 | 1,865/2,736 = 68.17% (59.7–74.5) | 800/2,736 = 29.24% (22.7–35.5) |
+| Qwen3.8:27B, earlier local folder `tuev_agent_ollama`, strict 0.50 question | 159 | 1,422/2,736 = 51.97% (43.0–59.9) | 692/2,736 = 25.29% (19.6–29.2) |
+| Qwen3.8:27B, that same earlier folder, 36-file subset | 36 | 260/447 = 58.17% (45.5–68.9) | 122/447 = 27.29% (15.9–38.2) |
 
-Full-split local recall, same coverage rule: SPSW 112/216, GPED 936/1,633, PLED 374/887. Ninety files have no positive event and still produce 308 reports.
+Intervals are file-level bootstrap 95% ranges. Every `metrics_v2.json` behind this table has `sanity.coverage_hits_match_stored` true.
 
-Re-parsing the saved answers with channel canonicalization changes the full local coverage count from 1,422 to 1,424 (file `pled_023_a_` only). The 235B hit count stays 330. Each run has one answer span whose channel is not in the TCP map: one in the 235B run, and one in the local run (inside the 36-file subset). Those spans are logged as `invalid_channel` and are not scored. The table above uses the stored parses, which are the numbers the original logs claimed.
+68.17% is Qwen3.8:27B (local Ollama) coverage on 159 files. It is not the paper's IoU hit rate for Qwen3-235B. On the 36 shared files, Ollama seed-0 coverage is 334 against DashScope's 330, and IoU hits are 137 against 146. Ollama seeds 1 and 2 on those files are 68.23% and 74.05% coverage. That spread, plus the channel-index fix, the `Eye movement` key, harness `authors_v2`, local Q4_K_M versus the DashScope API model, and BGE-M3 versus the paper's Qwen3-Embedding-8B sentence, blocks reading the table as a parameter-count result.
 
-The paper reports 69.30% hit rate and 44.77% false rate under "IoU > 0.7". The released scorer is coverage, not IoU. The released 235B run is 36 files, not 159, and its coverage hit rate is 73.83%, not 69.30%. Those paper figures are not a reproducible baseline.
+## Reproduce
 
-## Runs still to execute
+From the repo root, with `.env` copied from `.env.example` and `OLLAMA_PLANNER_API=ollama_native`. `TUEV_DATA_DIR` is the TUEV v2.0.1 eval split: 159 pairs, 512 windows. The conda env used for these runs is `/data/nmduong/cache/conda/envs/bci`.
 
-Exact commands, resume behavior, time, and the numbers to check are in [baseline_run.md](baseline_run.md). The eval commands there pass `--sleep 0`; the default without that flag is 5 seconds per window.
+These directories already exist. The commands are how they were produced. `--sleep` defaults to 5 seconds per window; the commands pass `--sleep 0`. Do not run two `TUEV_eval.py` processes at once. They share one Ollama server.
 
-| Id | Command | Role |
-| --- | --- | --- |
-| E1 | `python TUEV_oracle_run.py --rule both --threshold 0.5 --threshold 0.7 --out-dir runs/tuev_oracle` | Detector ceiling, no LLM. |
-| E2 | `python TUEV_eval.py --protocol tuev_authors_v2 --seed 0 --out-dir runs/tuev_authors_v2` | Primary qwen3.8 baseline, 159 files. |
-| E3 | Same command with `--seed 1` and `--seed 2`, and `--file-list config/protocols/authors_235b_files.txt` | Spread across seeds on the 36 files that have a 235B run. |
-| E4 | `--harness authors_v1`, `--prompt strict`, `--rag off`, `--think medium`, each with that file list | One factor at a time. `--prompt strict` also switches to the 0.50 question, the nine discharge tools, the rewritten tool text, and `<NOTE>` lines. |
+```bash
+python scripts/test_parse_calling.py
+python scripts/test_tuev_metrics.py
+python scripts/test_harness.py
+python scripts/baseline_smoke.py
 
-Headline comparisons after E2: qwen3.8 against the 235B row on the 36 files, and qwen3.8 on 159 files against the oracle ceiling.
+python TUEV_oracle_run.py --rule both --threshold 0.5 --threshold 0.7 \
+    --out-dir runs/tuev_oracle
 
-## Smoke
+python TUEV_eval.py --protocol tuev_authors_v2 --seed 0 --sleep 0 \
+    --out-dir runs/tuev_authors_v2
 
-`python scripts/baseline_smoke.py` passed on 2 Oct 2026, after the switch to `/api/chat`. Unit checks cover:
+for s in 1 2; do
+  python TUEV_eval.py --protocol tuev_authors_v2 --seed "$s" --sleep 0 \
+      --file-list config/protocols/authors_235b_files.txt \
+      --out-dir "runs/tuev_authors_v2_36_seed${s}"
+done
 
-- stop-sequence truncation
-- native options (`num_ctx`, `top_k`, `stop`, `seed`, `truncate: false`, `think: false`)
-- overflow and truncation flags
-- `<NOTE>` placement
-- the authors' parser under `authors_v1`
-- the authors' tool text in the prompt
+F=config/protocols/authors_235b_files.txt
+python TUEV_eval.py --harness authors_v1 --sleep 0 --file-list "$F" --out-dir runs/tuev_ablate_harness_v1
+python TUEV_eval.py --prompt strict      --sleep 0 --file-list "$F" --out-dir runs/tuev_ablate_strict
+python TUEV_eval.py --rag off            --sleep 0 --file-list "$F" --out-dir runs/tuev_ablate_rag_off
+python TUEV_eval.py --think medium       --sleep 0 --file-list "$F" --out-dir runs/tuev_ablate_think_medium
+```
 
-The live check used `bckg_014_a_` and `bckg_024_a_` (one window each, no positive labels). Five planner calls went through `ollama_native` with `stop: ["<RETURN>"]`. No assistant turn contained `<RETURN>`, and no transcript contained `<NOTE>`. Both system prompts showed the authors' tool text. `/api/ps` reported a loaded context of 65,536. The largest prompt was 18,378 tokens, prompt counts grew on every call, and there was no overflow or truncation. Resume left both transcripts in place.
+`--resume` skips windows already in `agent_raw.jsonl` whose transcript was saved. A raw line with no transcript and no error is run again. A window that failed with an exception is kept.
 
-These two files are a harness check, not a score. One window answered with two tuples. The other answered in prose that no channel qualified, which is status `unparseable` and contributes no events: the authors' question gives no explicit "no events" wording. Seed 0 is repeatable through `/api/chat` (same output twice; seed 1 differs).
+Rescore, after a run:
 
-Output paths from E0:
+```bash
+python scripts/rescore_tuev.py --run-dir runs/tuev_authors_v2 \
+    --out runs/tuev_authors_v2/metrics_v2.json
+python scripts/rescore_tuev.py --run-dir runs/tuev_authors_v2 --stems-from-git acd2e6a \
+    --out runs/rescore/e2_on_authors36/metrics_v2.json
+python scripts/rescore_tuev.py --git acd2e6a --git-prefix runs/tuev_agent \
+    --out runs/rescore/acd2e6a/metrics_v2.json
+```
 
-- `runs/tuev_agent_ollama/metrics_v2.json`
-- `runs/rescore/acd2e6a/metrics_v2.json`
-- `runs/rescore/local_on_authors36/metrics_v2.json`
+Expect `files=159` and `total_gt=2736` on the full Qwen3.8:27B split, and `files=36` and `total_gt=447` on the 36-file outputs. The Qwen3-235B (DashScope) rescore is `hits=330`, `total_gt=447`, `iou_hits=146`.
