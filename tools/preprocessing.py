@@ -1,4 +1,5 @@
 def preprocessing(raw, config):
+    """Band-pass the Raw, apply the notch when set, and resample to config['fs']."""
     fs, l_freq, h_freq, notch_freq = config['fs'], config['l_freq'], config['h_freq'], config['notch_freq']
     raw.filter(l_freq=l_freq, h_freq=h_freq) 
     if notch_freq is not None: 

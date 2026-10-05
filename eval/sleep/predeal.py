@@ -1,3 +1,4 @@
+"""Build Sleep-EDF tensors: 30-second epochs labeled W/N1/N2/N3/R, split by subject."""
 import os
 import mne
 import numpy as np
@@ -7,7 +8,7 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# label mapping
+# Hypnogram text to the five stages. Stage 3 and stage 4 both become N3.
 LABEL_MAP = {
     'Sleep stage W': 0,
     'Sleep stage 1': 1,
@@ -18,14 +19,16 @@ LABEL_MAP = {
 }
 
 class SleepEDFDataset:
+    """Pair each PSG with its hypnogram and cut the main sleep period into epochs."""
     def __init__(self, folder_path, eeg_channels=['EEG Fpz-Cz', 'EEG Pz-Oz'], epoch_length=30):
         self.folder_path = folder_path
         self.eeg_channels = eeg_channels
         self.epoch_length = epoch_length
-        self.subject_map = {}  # subject_id -> list of (psg,hyp)
+        self.subject_map = {}  # subject id -> [(psg file, hypnogram file), ...]
         self._build_file_pairs()
 
     def _build_file_pairs(self):
+        """Group PSG and hypnogram files that share a subject prefix."""
         files = os.listdir(self.folder_path)
         psg_files = sorted([f for f in files if f.endswith('-PSG.edf')])
         hyp_files = sorted([f for f in files if f.endswith('-Hypnogram.edf')])
@@ -43,7 +46,7 @@ class SleepEDFDataset:
                 print(f"Warning: Hypnogram file not found for {psg}, skipping...")
 
     def _get_sleep_range(self, annotations, raw, extend_wake=1800):
-        # find all wake
+        """Find the longest non-wake gap and pad it with wake on both sides."""
         wake_onsets = [ann['onset'] for ann in annotations if ann['description'] == 'Sleep stage W']
         wake_durations = [ann['duration'] for ann in annotations if ann['description'] == 'Sleep stage W']
 
@@ -56,8 +59,7 @@ class SleepEDFDataset:
             sleep_start = wake_onsets[max_gap_idx] + wake_durations[max_gap_idx]
             sleep_end = wake_onsets[max_gap_idx+1]
 
-        # expand extend_wake second
-        sleep_start = max(0, sleep_start - extend_wake)
+        sleep_start = max(0, sleep_start - extend_wake)  # Keep some wake before and after sleep.
         sleep_end = sleep_end + extend_wake
 
         total_end = annotations[-1]['onset'] + annotations[-1]['duration']
@@ -65,6 +67,7 @@ class SleepEDFDataset:
         return sleep_start, sleep_end
 
     def _load_file_pair(self, psg_file, hyp_file):
+        """Return epochs and labels for one night, dropping unlabeled epochs."""
         raw = mne.io.read_raw_edf(os.path.join(self.folder_path, psg_file), preload=True, verbose=False)
         raw.pick(picks=self.eeg_channels)
 
@@ -104,6 +107,7 @@ class SleepEDFDataset:
         return eeg_epochs[valid_idx], epoch_labels[valid_idx]
 
     def load_dataset(self, test_size=0.3, random_state=42):
+        """Split subjects, not epochs, into train and test."""
         subjects = list(self.subject_map.keys())
         train_subjects, test_subjects = train_test_split(
             subjects, test_size=test_size, random_state=random_state
@@ -136,6 +140,7 @@ class SleepEDFDataset:
         return X_train, y_train, X_test, y_test, file_train, file_test
 
     def save_dataset(self, save_folder, X_train, y_train, X_test, y_test, file_train, file_test):
+        """Write the tensors and the PSG/hypnogram pairs used for each split."""
         os.makedirs(save_folder, exist_ok=True)
         torch.save(X_train, os.path.join(save_folder, 'X_train.pt'))
         torch.save(y_train, os.path.join(save_folder, 'y_train.pt'))

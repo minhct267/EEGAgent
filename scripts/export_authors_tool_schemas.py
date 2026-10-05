@@ -1,10 +1,5 @@
 """Freeze the tool schemas registered by the authors' commit for the authors prompt.
-
-The current tools keep the channel-index fix and clearer descriptions. The
-authors prompt must show the original <Tools> text, so this script imports the
-tools package from `git archive <commit>` in a temp dir and writes its schemas.
-
-Usage: python scripts/export_authors_tool_schemas.py [--commit acd2e6a]
+Imports that commit with git archive because the live tool text is not the authors' text.
 """
 
 from __future__ import annotations
@@ -27,6 +22,7 @@ DUMP_CODE = (
 
 
 def export(commit: str) -> list:
+    """Import the tools package from that commit and return its registered schemas."""
     with tempfile.TemporaryDirectory(prefix="authors_tools_") as tmp:
         archive = subprocess.run(
             ["git", "archive", commit], cwd=PROJECT_ROOT, check=True, capture_output=True
@@ -39,6 +35,7 @@ def export(commit: str) -> list:
 
 
 def main() -> None:
+    """Write the frozen schemas next to the protocol files."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--commit", default="acd2e6a")
     parser.add_argument("--out", default=str(DEFAULT_OUT))

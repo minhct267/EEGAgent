@@ -1,4 +1,4 @@
-# Sleep EEGAgent evaluation.
+"""Score the agent's sleep-stage lists against Sleep-EDF hypnograms."""
 import os
 import json
 import time
@@ -14,7 +14,7 @@ import mne
 import regex as re
 
 DATA_PATH = "./eval/sleep/data/file_test.npy"
-EEG_DIR = "./eval/sleep/sleep-cassette"  # Folder of Sleep-EDF PSG/hypnogram files.
+EEG_DIR = "./eval/sleep/sleep-cassette"  # Sleep-EDF PSG and hypnogram files.
 SAVE_DIR = "./eval/eval_logs/Sleep"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -46,6 +46,7 @@ QUESTION_TEMPLATE = (
 )
 
 def extract_range(hyp_file, extend_wake=1800, random_pick=True):
+    """Pick a 30-minute window around the main sleep period, padded with wake."""
     annots = mne.read_annotations(hyp_file)
 
     wake_onsets = [a['onset'] for a in annots if a['description'] == 'Sleep stage W']
@@ -60,7 +61,7 @@ def extract_range(hyp_file, extend_wake=1800, random_pick=True):
         sleep_start = wake_onsets[max_gap_idx] + wake_durations[max_gap_idx]
         sleep_end = wake_onsets[max_gap_idx + 1]
 
-    # Pad the sleep window with wake and clamp to the annotation range.
+    # Include wake before and after sleep, then stay inside the recording.
     total_end = annots[-1]['onset'] + annots[-1]['duration']
     sleep_start = max(0.0, sleep_start - extend_wake)
     sleep_end = min(sleep_end + extend_wake, total_end)
@@ -78,7 +79,7 @@ def extract_range(hyp_file, extend_wake=1800, random_pick=True):
         else:
             start = sleep_start + (sleep_total - SEGMENT_DURATION) / 2.0
         end = start + SEGMENT_DURATION
-        # Clamp the picked window if it overruns the recording.
+        # Shift the window back if the random offset runs past the recording.
         if end > total_end:
             end = total_end
             start = max(sleep_start, end - SEGMENT_DURATION)
@@ -87,6 +88,7 @@ def extract_range(hyp_file, extend_wake=1800, random_pick=True):
 
 
 def load_ground_truth(hyp_file, start_time, end_time, epoch_len=30):
+    """Return one stage label per 30-second epoch. Unlabeled epochs count as wake."""
     annotations = mne.read_annotations(hyp_file)
 
     labels = []
@@ -94,28 +96,27 @@ def load_ground_truth(hyp_file, start_time, end_time, epoch_len=30):
     offset_arr = np.array([a['onset'] + a['duration'] for a in annotations])
     desc_arr = np.array([a['description'] for a in annotations])
 
-    # Slice annotations into 30-second epochs.
+    # One label per epoch, taken from the annotation that covers the epoch start.
     n_epochs = int(np.floor((end_time - start_time) / epoch_len))
     for i in range(n_epochs):
         epoch_start = start_time + i * epoch_len
 
-        # Find the annotation covering this epoch start. 
         idx = np.where((onset_arr <= epoch_start) & (epoch_start < offset_arr))[0]
         if len(idx) > 0:
             desc = desc_arr[idx[0]]
             if desc in LABEL_MAP:
                 stage = ['W', 'N1', 'N2', 'N3', 'R'][LABEL_MAP[desc]]
             else:
-                stage = 'W'
+                stage = 'W'  # Stage text outside LABEL_MAP is scored as wake.
         else:
-            stage = 'W'  # fallback
+            stage = 'W'  # No annotation covers this epoch.
 
         labels.append(stage)
 
     return labels
 
 
-# Main evaluation loop.
+# Score every test recording, then write pooled accuracy and the confusion matrix.
 all_true, all_pred = [], []
 results = []
 
@@ -137,7 +138,7 @@ for i, (psg_file, hyp_file) in enumerate(files):
     result = agent.run(question)
     response = result["response"]
 
-    # Ground-truth stages for this window.
+    # Stages the hypnogram assigns to this same window.
     gt_segment = load_ground_truth(hyp_path, start_time=start_t, end_time=end_t)
     n_epochs = len(gt_segment)
     
@@ -191,7 +192,7 @@ for i, (psg_file, hyp_file) in enumerate(files):
     save_path = os.path.join(SAVE_DIR, f"{psg_file[:-4]}_{timestamp}.json")
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
-# Write the run summary.
+# Pooled accuracy, macro-F1, and confusion matrix for the recordings that matched in length.
 if all_true:
     cm_total = confusion_matrix(all_true, all_pred, labels=STAGE_LABELS)
     acc_total = accuracy_score(all_true, all_pred)

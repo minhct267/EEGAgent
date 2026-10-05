@@ -60,6 +60,7 @@ def load_env() -> None:
 
 
 def _env_float(name: str, default: float) -> float:
+    """Read a float from the environment, or default when the variable is unset."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
@@ -70,6 +71,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _env_int(name: str, default: int) -> int:
+    """Read an int from the environment, or default when the variable is unset."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
@@ -80,6 +82,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def is_local_base_url(base_url: str) -> bool:
+    """True for 127.0.0.1 and localhost endpoints."""
     lowered = (base_url or "").lower()
     return "127.0.0.1" in lowered or "localhost" in lowered
 
@@ -101,6 +104,7 @@ def model_name_available(model_ids: list[str], model: str) -> bool:
 
 @lru_cache(maxsize=1)
 def get_planner_settings() -> PlannerSettings:
+    """Build planner settings from .env, filling any missing value with the local default."""
     load_env()
     base_url = (
         os.environ.get("OLLAMA_PLANNER_BASE_URL", "").strip()
@@ -134,6 +138,7 @@ def get_planner_settings() -> PlannerSettings:
 
 @lru_cache(maxsize=1)
 def get_embed_settings() -> EmbedSettings:
+    """Build embedding settings from .env. Defaults to local bge-m3."""
     load_env()
     api_key = os.environ.get("OLLAMA_EMBED_API_KEY", DEFAULT_EMBED_API_KEY).strip() or DEFAULT_EMBED_API_KEY
     return EmbedSettings(
@@ -172,17 +177,13 @@ class ContextOverflowError(RuntimeError):
 
 
 def ollama_root(base_url: str) -> str:
+    """Drop a trailing /v1 so the URL points at the native Ollama API."""
     root = (base_url or "").rstrip("/")
     return root[: -len("/v1")] if root.endswith("/v1") else root
 
 
 class OllamaNativeClient:
-    """`client.chat.completions.create()` over Ollama's /api/chat.
-
-    /v1 drops `options`, so num_ctx and top_k never reach the runner there, and an
-    over-long prompt silently loses its oldest messages. This client sends options
-    natively and sets truncate=false so an overflow raises ContextOverflowError.
-    """
+    """POST /api/chat so options such as num_ctx apply, and raise if the prompt exceeds the context."""
 
     def __init__(self, base_url: str, api_key: str | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.root = ollama_root(base_url)
@@ -250,12 +251,14 @@ class OllamaNativeClient:
 
 
 def make_planner_client(settings: PlannerSettings):
+    """Return the native Ollama client or an OpenAI-compatible client, matching settings.api."""
     if settings.api == "ollama_native":
         return OllamaNativeClient(settings.base_url, settings.api_key, settings.timeout)
     return OpenAI(api_key=settings.api_key, base_url=settings.base_url, timeout=settings.timeout)
 
 
 def planner_client():
+    """Client for the planner settings currently in the environment."""
     return make_planner_client(get_planner_settings())
 
 
@@ -274,6 +277,7 @@ def ollama_loaded_context(base_url: str, model: str) -> int | None:
 
 
 def embed_client() -> OpenAI:
+    """OpenAI-compatible client for the local embedding endpoint."""
     settings = get_embed_settings()
     return OpenAI(api_key=settings.api_key, base_url=settings.base_url, timeout=60.0)
 

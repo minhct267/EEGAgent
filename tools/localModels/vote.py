@@ -1,3 +1,4 @@
+"""Soft voting over the locally loaded classifier checkpoints."""
 import torch
 def multi_model_predict(models, data_tensor, mask=None):
     """Average softmax scores across models (soft voting)."""
@@ -15,6 +16,6 @@ def multi_model_predict(models, data_tensor, mask=None):
             probs = torch.softmax(logits, dim=-1)
             all_probs.append(probs.cpu())
 
-    all_probs = torch.stack(all_probs)  # shape: (num_models, 1, num_classes)
-    avg_probs = all_probs.mean(dim=0)  # shape: (1, num_classes)
+    all_probs = torch.stack(all_probs)  # (n_models, batch, classes)
+    avg_probs = all_probs.mean(dim=0)  # (batch, classes)
     return avg_probs.numpy().flatten()

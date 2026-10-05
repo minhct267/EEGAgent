@@ -1,3 +1,4 @@
+"""Train an EEGNet sleep-stage classifier on the tensors written by predeal.py."""
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,7 +8,7 @@ import torch.nn.init as init
 import numpy as np
 import os
 
-# Load train/test tensors.
+# Tensors produced by eval/sleep/predeal.py.
 save_folder = "./data"
 X_train = torch.load(f"{save_folder}/X_train.pt")
 y_train = torch.load(f"{save_folder}/y_train.pt")
@@ -16,8 +17,8 @@ y_test = torch.load(f"{save_folder}/y_test.pt")
 
 
 
-# Build DataLoaders.
 def get_dataloader(X, y, batch_size=64, shuffle=True):
+    """Wrap one split in a DataLoader."""
     dataset = TensorDataset(X, y)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
@@ -27,16 +28,11 @@ print(np.unique(y_test, return_counts=True))
 train_loader = get_dataloader(X_train, y_train)
 test_loader = get_dataloader(X_test, y_test, batch_size=1024, shuffle=False)
 
-# Model.
 import torch
 import torch.nn as nn
 
 class SeparableConv2d(nn.Module):
-    """
-    Depthwise separable convolution:
-      - depthwise: groups = in_channels (spatial filtering per feature map)
-      - pointwise: 1x1 conv to mix features
-    """
+    """Depthwise spatial filter per map, then a 1x1 conv that mixes the maps."""
     def __init__(self, in_ch, out_ch, kernel_size, padding=0, bias=False):
         super().__init__()
         self.depthwise = nn.Conv2d(in_ch, in_ch, kernel_size=kernel_size,
@@ -50,17 +46,14 @@ class SeparableConv2d(nn.Module):
 
 
 class EEGNet(nn.Module):
-    """
-    PyTorch implementation of EEGNet (Lawhern et al. 2018) style.
-    Input shape: (batch, 1, n_channels, n_samples)
-    """
+    """EEGNet-style classifier. Expects (batch, channels, samples) and adds the singleton dim."""
     def __init__(self,
                  n_channels,
                  n_samples,
                  n_classes,
-                 F1=32,         # number of temporal filters
-                 D=8,          # depth multiplier for spatial filters
-                 F2=None,      # number of pointwise filters (if None -> F1*D)
+                 F1=32,         # Temporal filters.
+                 D=8,          # Spatial filters per temporal filter.
+                 F2=None,      # Pointwise filters. Defaults to F1 * D.
                  kernel_length=75,
                  dropout=0.,
                  pool_kernel=5,
@@ -98,7 +91,7 @@ class EEGNet(nn.Module):
         self._initialize_weights()
 
     def _forward_features(self, x):
-        # x: (B, 1, nch, ns)
+        # x is (batch, 1, channels, samples).
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.depthwise(x)
@@ -134,10 +127,11 @@ class EEGNet(nn.Module):
 
 
 
-# Training loop.
 import time
 def train_model(model, train_loader, epochs=10, lr=1e-3, device='cpu'):
+    """Train with AdamW and print loss, accuracy, and macro-F1 after each epoch."""
     model.to(device)
+    # Earlier experiment: inverse-frequency class weights. Not used.
     # class_counts = np.bincount(y_train.numpy())
     # weights = 1.0 / class_counts
     # weights = weights / weights.sum() * len(class_counts)  # normalize
@@ -163,11 +157,9 @@ def train_model(model, train_loader, epochs=10, lr=1e-3, device='cpu'):
             correct += (outputs.argmax(1) == y_batch).sum().item()
             total += y_batch.size(0)
             
-            # Collect predictions and labels.
-            all_preds.append(outputs.argmax(1).detach().cpu())
+            all_preds.append(outputs.argmax(1).detach().cpu())  # Kept for epoch-level macro-F1.
             all_labels.append(y_batch.cpu())
 
-        # Concatenate all batches.
         all_preds = torch.cat(all_preds).numpy()
         all_labels = torch.cat(all_labels).numpy()
         macro_f1 = f1_score(all_labels, all_preds, average='macro')
@@ -175,10 +167,10 @@ def train_model(model, train_loader, epochs=10, lr=1e-3, device='cpu'):
         print(f"Epoch {epoch+1}/{epochs}:{time1-time0:.2f}s - Loss: {total_loss/total:.4f} - Acc: {correct/total:.4f} - MF1: {macro_f1:.4f}")
         test_model(model, test_loader, device=device)
 
-# Evaluation.
 best_f1 = 0
 
 def test_model(model, test_loader, device='cpu', class_names=None):
+    """Score the test loader and save a checkpoint when macro-F1 improves past 0.74."""
     global best_f1  
     model.eval()
     all_preds, all_labels = [], []
@@ -209,7 +201,7 @@ def test_model(model, test_loader, device='cpu', class_names=None):
 
     return acc, macro_f1
 
-# Run training and evaluation.
+# Label names from predeal.py. This script trains on the integer tensors above.
 '''
 LABEL_MAP = {
     'Sleep stage W': 0,
@@ -221,8 +213,8 @@ LABEL_MAP = {
 }
 '''
 
-device = 'cuda:3' if torch.cuda.is_available() else 'cpu'
+device = 'cuda:3' if torch.cuda.is_available() else 'cpu'  # Use cuda:3 when CUDA is available.
 model = EEGNet(n_channels=2, n_samples=3000, n_classes=5)
 train_model(model, train_loader, epochs=100, lr=5e-3, device=device)
 
-# 86 82
+# Previous run: accuracy 86, macro-F1 82.

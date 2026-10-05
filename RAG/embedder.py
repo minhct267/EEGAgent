@@ -10,6 +10,7 @@ DEFAULT_BATCH_SIZE = 32
 
 
 def _l2_normalize(vectors: List[List[float]]) -> List[List[float]]:
+    """Scale each vector to unit length so inner product equals cosine similarity."""
     if not vectors:
         return []
     array = np.asarray(vectors, dtype=np.float32)
@@ -19,6 +20,7 @@ def _l2_normalize(vectors: List[List[float]]) -> List[List[float]]:
 
 
 class BGEEmbedder:
+    """Call the local Ollama BGE-M3 endpoint and return unit-length vectors."""
     def __init__(self, model_name: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE):
         settings = get_embed_settings()
         self.model_name = model_name or settings.model
@@ -26,6 +28,7 @@ class BGEEmbedder:
         self.client = embed_client()
 
     def encode(self, texts: List[str]) -> List[List[float]]:
+        """Embed texts with the configured Ollama model and L2-normalize the vectors."""
         if not texts:
             return []
 

@@ -1,3 +1,4 @@
+"""Parse planner tool calls from <FUNCTION>/<ARGS> text and from <invoke> XML."""
 import ast
 import inspect
 import json
@@ -25,6 +26,7 @@ TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
 
 def skip_whitespace(text, start):
+    """Return the first non-whitespace index at or after start."""
     while start < len(text) and text[start].isspace():
         start += 1
     return start
@@ -68,6 +70,7 @@ def extract_balanced_object(text, start):
 
 
 def _normalize_args_text(args_str):
+    """Strip fences and a trailing </ARGS> so the remainder can be parsed as an object."""
     text = (args_str or "").strip()
     text = FENCE_RE.sub("", text).strip()
     closer = text.rfind("</ARGS>")
@@ -107,6 +110,7 @@ def parse_tool_args(args_str):
 
 
 def _parse_parameter_value(raw):
+    """Parse one <parameter> body as JSON or a Python literal, otherwise keep the text."""
     text = (raw or "").strip()
     if not text:
         return ""
@@ -121,6 +125,7 @@ def _parse_parameter_value(raw):
 
 
 def extract_invoke_calls(response):
+    """Read MiniMax-style <invoke name=...> blocks into {name, args} dicts."""
     calls = []
     for match in INVOKE_RE.finditer(response):
         args = {}
@@ -132,6 +137,7 @@ def extract_invoke_calls(response):
 
 
 def _scan_function_headers(response, log=True):
+    """Scan <FUNCTION>/<ARGS> headers and split them into parsed calls and failures."""
     tool_calls = []
     failures = []
     seen = set()
@@ -168,6 +174,7 @@ def _scan_function_headers(response, log=True):
 
 
 def extract_tool_calls(response):
+    """Return unique tool calls from <FUNCTION> blocks and from <invoke> XML."""
     if not response:
         return []
 
@@ -195,6 +202,7 @@ def extract_tool_calls_authors(response):
 
 
 def extract_tool_call_failures(response):
+    """Return <FUNCTION> calls whose ARGS could not be parsed. Does not print."""
     if not response:
         return []
     _, failures, _ = _scan_function_headers(response, log=False)
@@ -202,4 +210,5 @@ def extract_tool_call_failures(response):
 
 
 def has_config_parameter(func):
+    """True when the tool accepts config, which the loop injects and the planner does not."""
     return "config" in inspect.signature(func).parameters

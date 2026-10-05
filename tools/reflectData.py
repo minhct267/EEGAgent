@@ -28,6 +28,7 @@ from .registerData import getRegisteredData
     }
 )
 def reflectData(name: List[str], start: int, end: int, config):
+    """Return the raw samples of the named channels. The interval must be at most 1 second."""
     if end - start > 1:
         raise ValueError("The time interval between start and end should not exceed 10 seconds.")
     data = getRegisteredData()

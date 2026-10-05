@@ -1,8 +1,4 @@
-"""Event-level TUEV scoring: merge reports, count GT hits, and audit unmatched episodes.
-
-Coverage fields match the authors' scorer. Extra fields are the v2 metrics:
-best-report IoU, per-class recall, event precision, and zero-GT report counts.
-"""
+"""Event-level TUEV scoring: merge reports, count ground-truth hits, and classify unmatched episodes."""
 
 import json
 import math
@@ -41,6 +37,7 @@ IOU_HIT_THRESHOLD = 0.7
 
 
 def write_json(path, data):
+    """Write indented JSON, creating parent directories when needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -48,11 +45,13 @@ def write_json(path, data):
 
 
 def load_summary(path):
+    """Load one per-file summary.json."""
     with Path(path).open(encoding="utf-8") as f:
         return json.load(f)
 
 
 def aggregate_summaries(summaries):
+    """Sum per-file counts and recompute the pooled rates."""
     totals = {key: 0 for key in COUNT_KEYS}
     thresholds = set()
     models = set()
@@ -89,6 +88,7 @@ def aggregate_summaries(summaries):
 
 
 def aggregate_v2(summaries):
+    """Add IoU, per-class recall, event F1, and file-level bootstrap intervals."""
     if not summaries or not any("iou_hits" in summary for summary in summaries):
         return {}
     totals = {key: 0 for key in V2_COUNT_KEYS}
@@ -124,18 +124,21 @@ def aggregate_v2(summaries):
 
 
 def _finite_rate(numerator, denominator):
+    """Return numerator/denominator, or NaN when the denominator is zero."""
     if not denominator:
         return float("nan")
     return numerator / denominator
 
 
 def _f1(precision, recall):
+    """Harmonic mean of precision and recall. NaN in either input stays NaN."""
     if precision != precision or recall != recall or precision + recall == 0:
         return float("nan") if precision != precision or recall != recall else 0.0
     return 2 * precision * recall / (precision + recall)
 
 
 def _percentile(sorted_values, fraction):
+    """Linear-interpolated percentile of an already sorted list."""
     if not sorted_values:
         return None
     if len(sorted_values) == 1:
@@ -178,6 +181,7 @@ def bootstrap_file_rate(numerators, denominators, draws=1000, seed=0):
 
 
 def best_report_iou(gt, reports):
+    """Highest IoU between one ground-truth event and any same-channel report."""
     gt_length = gt["end"] - gt["start"]
     best = 0.0
     for report in reports:
@@ -194,12 +198,14 @@ def best_report_iou(gt, reports):
 
 
 def calculate_overlap(box_a, box_b):
+    """Length of the overlap between two [start, end] intervals."""
     inter_start = max(box_a[0], box_b[0])
     inter_end = min(box_a[1], box_b[1])
     return max(0, inter_end - inter_start)
 
 
 def merge_intervals(intervals):
+    """Merge overlapping [start, end] intervals and drop empty ones."""
     merged = []
     for start, end in sorted(intervals):
         if end <= start:
@@ -212,10 +218,12 @@ def merge_intervals(intervals):
 
 
 def interval_total_length(intervals):
+    """Sum the lengths of intervals that are already non-overlapping."""
     return sum(end - start for start, end in intervals)
 
 
 def merge_predictions(predictions, gap_threshold=1.0):
+    """Merge same-channel reports whose gap is within the threshold."""
     grouped = {}
     for pred in predictions:
         grouped.setdefault(pred["channel"], []).append(pred)
@@ -237,7 +245,7 @@ def merge_predictions(predictions, gap_threshold=1.0):
 
 
 def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7, gap_threshold=1.0):
-    # Merge nearby reports on the same channel; a GT event hits if coverage >= threshold.
+    """Merge nearby same-channel reports. A ground-truth event hits when coverage reaches the threshold."""
     gt_events = list(gt_events or [])
     negative_events = list(negative_events or [])
     raw_predictions = list(raw_predictions or [])
@@ -295,7 +303,7 @@ def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7
                 hit_contributing_reports += 1
             continue
 
-        # No positive GT overlap: count as unmatched, then split negative vs unverified.
+        # No positive overlap: unmatched, then split into explicit-negative vs unverified.
         strict_unmatched_reports += 1
         if has_negative_overlap:
             explicit_negative_reports += 1
@@ -359,6 +367,7 @@ def score_predictions(gt_events, negative_events, raw_predictions, threshold=0.7
 
 
 def summarize_metrics(metrics, model):
+    """Keep the counts that aggregate_summaries adds across files."""
     return {
         "files": 1,
         "model": model,
@@ -391,6 +400,7 @@ def summarize_metrics(metrics, model):
 
 def write_file_outputs(out_dir, stem, edf_path, rec_path, model, gt_events, negative_events, raw_predictions,
                        metrics, scored_report_episodes, raw_logs, report_overlap_threshold=0.7):
+    """Write one recording's raw log, transcript, predictions, and metrics."""
     file_out_dir = Path(out_dir) / stem
     messages_dir = file_out_dir / "messages"
     file_out_dir.mkdir(parents=True, exist_ok=True)
@@ -456,6 +466,7 @@ def write_file_outputs(out_dir, stem, edf_path, rec_path, model, gt_events, nega
 
 
 def write_global_outputs(out_dir):
+    """Pool every per-file summary.json under out_dir into the aggregate files."""
     root_out_dir = Path(out_dir)
     summary_files = sorted(root_out_dir.glob("*/summary.json"))
     summaries = [load_summary(path) for path in summary_files]

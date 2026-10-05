@@ -1,3 +1,4 @@
+"""Split PDF and text knowledge files into chunks for the FAISS index."""
 import fitz
 import re
 from nltk.tokenize import sent_tokenize

@@ -1,9 +1,4 @@
-"""Tool-only TUEV ceiling under the same windows and scorer as the agent.
-
-Windows are the integers the agent is asked about (`round` of each merged
-annotation span). A second is a positive report when the chosen tool's `seiz`
-probability is at least the threshold.
-"""
+"""Tool-only TUEV ceiling on the agent's windows and scorer; a second is positive when seiz meets the threshold."""
 
 from __future__ import annotations
 
@@ -33,6 +28,7 @@ RULES = ("seizNormal", "seizArtiBckg")
 
 
 def load_config(config_path):
+    """Load the project config JSON used by the detection tools."""
     with open(config_path, encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -47,6 +43,7 @@ def asked_bounds(start, end):
 
 
 def tool_for(rule: str):
+    """Return the 1-second seizure tool selected by --rule."""
     if rule == "seizNormal":
         from tools.singleChannel import seizureNormalModel_OneSecond
 
@@ -59,6 +56,7 @@ def tool_for(rule: str):
 
 
 def predictions_from_result(result, threshold):
+    """Keep channel-seconds whose seiz probability is at least the threshold."""
     predictions = []
     for item in result:
         duration = str(item["duration"]).replace("s", "")
@@ -78,6 +76,7 @@ def predictions_from_result(result, threshold):
 
 
 def run_oracle(pairs, config_path, threshold, rule, out_dir):
+    """Run one tool over every asked window and score it like the agent."""
     from tools.dataLoad import dataLoad
     from tools.registerData import registerData
 
@@ -150,6 +149,7 @@ def run_oracle(pairs, config_path, threshold, rule, out_dir):
 
 
 def expand_rules(raw: str) -> list[str]:
+    """Turn --rule both into the two seizure tools, or keep a single rule."""
     if raw == "both":
         return list(RULES)
     if raw not in RULES:
@@ -158,6 +158,7 @@ def expand_rules(raw: str) -> list[str]:
 
 
 def main():
+    """List the paired files, or run the selected rule and threshold grid."""
     load_env()
     parser = argparse.ArgumentParser(description="Tool-only TUEV oracle aligned with the agent scorer.")
     parser.add_argument("--mode", choices=["list", "oracle"], default="oracle")

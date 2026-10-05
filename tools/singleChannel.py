@@ -9,33 +9,34 @@ from .register import function_register
 
 
 def _unique_sorted_channel_ids(name: List[str]):
-    # Unknown names still KeyError into the existing execution-error path.
+    """Map channel names to sorted indexes. An unknown name raises KeyError for the tool loop."""
     ids = sorted({name2index[item] for item in name})
     return ids, [index2name[i] for i in ids]
 
 
 class SingleChannelEEG(nn.Module):
+    """1-second per-channel CNN followed by rotary attention."""
     def __init__(self, cls, embed_dim=128, num_heads=4, max_len=256):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv1d(1, 16, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(256),
-            nn.MaxPool1d(2, 2),  # -> 128
+            nn.MaxPool1d(2, 2),  # 256 samples -> 128.
             nn.Conv1d(16, 16, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(128),
             nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(128),
-            nn.MaxPool1d(2, 2),  # -> 64
+            nn.MaxPool1d(2, 2),  # 128 samples -> 64.
             nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(64),
             nn.Conv1d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(64),
-            nn.MaxPool1d(2, 2),  # -> 32
+            nn.MaxPool1d(2, 2),  # 64 samples -> 32.
             nn.Conv1d(64, embed_dim, kernel_size=3, stride=1, padding=1),
             nn.GELU(),
             nn.LayerNorm(32)
@@ -50,13 +51,13 @@ class SingleChannelEEG(nn.Module):
 
     def forward(self, x):
         x = x.unsqueeze(1)
-        x = self.conv(x)  # [B, C=embed_dim, T']
-        x = x.transpose(1, 2)  # [B, T', C]
+        x = self.conv(x)  # (B, embed_dim, time)
+        x = x.transpose(1, 2)  # (B, time, embed_dim)
 
         for layer in self.attn_layers:
-            x, _ = layer(x)  # v = x
+            x, _ = layer(x)  # Drop the attention weights.
 
-        x = self.pool(x).squeeze(1)  # [B, C]
+        x = self.pool(x).squeeze(1)  # (B, embed_dim)
         x = self.fc(x)
         return x
 
@@ -114,6 +115,7 @@ model_musle_eyem.eval()
     }
 )
 def eyemMuscleModel_OneSecond(name: List[str], start:int, end:int, config):
+    """Score each second as eye movement or muscle. There is no clean class. Span must be <= 10 s."""
     if end - start > 10:
         raise ValueError("The time interval between start and end should not exceed 10 seconds.")
     
@@ -129,7 +131,7 @@ def eyemMuscleModel_OneSecond(name: List[str], start:int, end:int, config):
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 
-        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (1, T)
+        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (channels, samples)
         logits = model_musle_eyem(data_tensor)
         probs = torch.softmax(logits, dim=-1)
 
@@ -188,6 +190,7 @@ model_seiz_arti_bckg.eval()
     }
 )
 def seizureArtiBckgModel_OneSecond(name: List[str], start:int, end:int, config):
+    """Score each second and channel as background, artifact, or seizure. Span must be <= 10 s."""
     if end - start > 10:
         raise ValueError("The time interval between start and end should not exceed 10 seconds.")
     
@@ -203,7 +206,7 @@ def seizureArtiBckgModel_OneSecond(name: List[str], start:int, end:int, config):
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 
-        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (1, T)
+        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (channels, samples)
         logits = model_seiz_arti_bckg(data_tensor)
         probs = torch.softmax(logits, dim=-1)
 
@@ -256,6 +259,7 @@ model_seiz_normal.eval()
     }
 )
 def seizureNormalModel_OneSecond(name: List[str], start:int, end:int, config):
+    """Score each second and channel as seizure or non-seizure. Span must be <= 10 s."""
     if end - start > 10:
         raise ValueError("The time interval between start and end should not exceed 10 seconds.")
     
@@ -271,7 +275,7 @@ def seizureNormalModel_OneSecond(name: List[str], start:int, end:int, config):
         info = {}
         info['duration'] = f"{start + i}s-{start + (i + 1)}s"
 
-        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (1, T)
+        data_tensor = torch.tensor(x, dtype=torch.float32).to(device)  # (channels, samples)
         logits = model_seiz_normal(data_tensor)
         probs = torch.softmax(logits, dim=-1)
 

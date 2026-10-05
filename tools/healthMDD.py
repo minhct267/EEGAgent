@@ -5,6 +5,7 @@ from .registerData import getRegisteredData
 import scipy.signal as signal
 
 class healthMDD(nn.Module):
+    """CNN that scores one 5-second epoch as healthy or MDD."""
     def __init__(self, n_channels=19, n_samples=1280, hidden=64, p=0.):
         super().__init__()
         self.conv = nn.Sequential(
@@ -26,7 +27,7 @@ class healthMDD(nn.Module):
         self.fc = nn.Linear(hidden, 2)
 
     def forward(self, x):
-        x = self.conv(x).flatten(1) # (32, 48, 49)
+        x = self.conv(x).flatten(1)  # (batch, hidden)
         return self.fc(x)
     
 
@@ -62,17 +63,18 @@ model_normalEEG.eval()
     }
 )
 def healthMDDModel(start: int, end: int, config, segment_length=5):
+    """Score each complete 5-second slice in [start, end] as healthy or MDD."""
     if end - start < segment_length:
         return [{"warning": f"data length {end-start:.2f}s < {segment_length}s"}]
 
-    data = getRegisteredData(start, end, config)  # shape: [C, T]
+    data = getRegisteredData(start, end, config)  # (channels, samples)
     fs_target = config['fs']
     duration_sec = end - start
     data = signal.resample(data, num=int(duration_sec * config['fs']), axis=1)
 
     n_samples = data.shape[1]
     seg_samples = segment_length * fs_target
-    n_segments = n_samples // seg_samples  # Keep only complete 5-second slices.
+    n_segments = n_samples // seg_samples  # Drop a trailing slice shorter than 5 seconds.
 
     results = []
 

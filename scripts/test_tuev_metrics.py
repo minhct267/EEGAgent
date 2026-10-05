@@ -15,12 +15,14 @@ from utils.tuev_metrics import aggregate_summaries, bootstrap_file_rate, score_p
 
 
 def expect(condition: bool, detail: str) -> None:
+    """Exit on the first failed check and print a PASS line otherwise."""
     if not condition:
         raise SystemExit(f"[FAIL] {detail}")
     print(f"[PASS] {detail}")
 
 
 def main() -> None:
+    """Check coverage hits, IoU, per-class counts, and the file-level bootstrap."""
     gt = [
         {"channel": 0, "channel_name": "FP1-F7", "start": 10.0, "end": 12.0, "class": 1},
         {"channel": 1, "channel_name": "F7-T3", "start": 10.0, "end": 11.0, "class": 2},

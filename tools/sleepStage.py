@@ -5,6 +5,7 @@ from .registerData import getRegisteredData
 import scipy.signal as signal
 
 class SleepStage(nn.Module):
+    """CNN plus GRU that scores one 30-second epoch as W, N1, N2, N3, or REM."""
     def __init__(self, n_channels=2, n_classes=5):
         super().__init__()
         self.cnn = nn.Sequential(
@@ -35,16 +36,15 @@ class SleepStage(nn.Module):
         # self.apply(self.init_weights)
 
     def forward(self, x):
-        # x: [batch, n_channels, time_samples]
+        # x is (batch, channels, samples).
         batch_size, n_channels, total_len = x.shape
-        sec_len = total_len // 15
+        sec_len = total_len // 15  # Split the epoch into 15 chunks before the CNN.
         x = x.view(batch_size, 15, n_channels, sec_len).flatten(0, 1)
 
         x = self.cnn(x)
         x = x.reshape(batch_size, 15, -1)
         
-        # GRU
-        out, _ = self.gru(x)
+        out, _ = self.gru(x)  # Use the last bidirectional state.
         out = out[:, -1, :]
         logits = self.fc(out)
         return logits
@@ -60,14 +60,8 @@ model_sleepEEG.load_state_dict(
 )
 model_sleepEEG.eval()
 
-# -------------------------
-# Label mapping
-# -------------------------
-SLEEP_LABELS = ["W", "N1", "N2", "N3", "R"]
+SLEEP_LABELS = ["W", "N1", "N2", "N3", "R"]  # Wake, N1, N2, N3, and REM.
 
-# -------------------------
-# Tool registration
-# -------------------------
 @function_register.register(
     description=(
         "Predict 5-class sleep stages for a given EEG segment. "
@@ -98,14 +92,14 @@ SLEEP_LABELS = ["W", "N1", "N2", "N3", "R"]
     }
 )
 def sleepStageModel(start: int, end: int, config, segment_length=30):
+    """Score each non-overlapping 30-second epoch in [start, end]."""
     if end - start < segment_length:
         return [{"warning": f"Data length {end-start:.2f}s is too short for a {segment_length}s prediction"}]
 
-    data = getRegisteredData(start, end, config)  # [C, T]
+    data = getRegisteredData(start, end, config)  # (channels, samples)
     fs_target = config['fs']
     duration_sec = end - start
-    # Resample data to target sampling rate
-    data = signal.resample(data, num=int(duration_sec * fs_target), axis=1)
+    data = signal.resample(data, num=int(duration_sec * fs_target), axis=1)  # Match the model's sampling rate.
 
     n_samples = data.shape[1]
     seg_samples = segment_length * fs_target
@@ -116,7 +110,7 @@ def sleepStageModel(start: int, end: int, config, segment_length=30):
         start_idx = i * seg_samples
         end_idx = start_idx + seg_samples
         seg = data[:, start_idx:end_idx]
-        x_tensor = torch.tensor(seg, dtype=torch.float32).unsqueeze(0)  # [1, C, T]
+        x_tensor = torch.tensor(seg, dtype=torch.float32).unsqueeze(0)  # (1, channels, samples)
 
         with torch.no_grad():
             logits = model_sleepEEG(x_tensor)

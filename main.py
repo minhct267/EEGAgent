@@ -1,3 +1,4 @@
+"""Planner loop that loads one EEG file, calls tools, and returns the final answer."""
 import os
 import json
 import time
@@ -44,6 +45,7 @@ def resolve_eeg_path(data_path: str, file_name: str) -> str:
 
 
 class EEGAgent:
+    """Load one EEG file and answer a question by looping the planner and the registered tools."""
     def __init__(
         self,
         config_path: str,
@@ -117,9 +119,11 @@ class EEGAgent:
         self.messages = [{'role': 'system', 'content': self.system_prompt}]
 
     def prepare_user_message(self, user_query: str):
+        """Append the user question to the conversation."""
         self.messages.append({'role': 'user', 'content': user_query})
 
     def _usage_value(self, usage, name: str):
+        """Read one usage field from either a dict or an object."""
         if usage is None:
             return None
         if isinstance(usage, dict):
@@ -127,6 +131,7 @@ class EEGAgent:
         return getattr(usage, name, None)
 
     def call_model(self, model: str | None = None):
+        """Call the planner, record token use, and store the reply with stop markers removed."""
         used_model = model or self.model
         kwargs = {
             "model": used_model,
@@ -176,7 +181,7 @@ class EEGAgent:
         context_warning = bool(
             prompt_tokens is not None and self.num_ctx and prompt_tokens >= 0.95 * self.num_ctx
         )
-        # History only grows within a window, so a smaller prompt means the server dropped messages.
+        # History only grows inside a window, so a smaller prompt means the server dropped messages.
         previous = [item["prompt_tokens"] for item in self.call_records if item.get("prompt_tokens") is not None]
         context_truncated = bool(prompt_tokens is not None and previous and prompt_tokens < max(previous))
         self.call_records.append({
@@ -243,6 +248,7 @@ class EEGAgent:
         return True
 
     def handle_tool_calls(self, response):
+        """Run the parsed calls and append their results. False means the reply had no call."""
         if self.harness.tool_calls == "authors":
             return self._handle_tool_calls_authors(response)
         source = response
@@ -289,7 +295,7 @@ class EEGAgent:
                 })
                 continue
 
-            # Inject config when the tool signature expects it.
+            # The planner never sends config; inject it when the tool signature expects it.
             if has_config_parameter(function) and 'config' not in args:
                 args['config'] = self.config
 
@@ -317,6 +323,7 @@ class EEGAgent:
         return True
 
     def _retrieve(self, user_query: str):
+        """Append the top knowledge chunks to the system prompt when retrieval is on."""
         self.retrieval = []
         if not self.rag_enabled:
             self.harness_events.append("rag_off")
@@ -338,6 +345,7 @@ class EEGAgent:
                 self.messages[0]["content"] += f"{rank}. {text}\n"
 
     def run(self, user_query, max_rounds=8):
+        """Loop the planner and tools until a final answer, the round cap, or a context overflow."""
         self.call_records = []
         self.harness_events = []
         self._retrieve(user_query)
@@ -358,7 +366,7 @@ class EEGAgent:
             try:
                 response = self.call_model()
             except ContextOverflowError:
-                # A longer history cannot fit either, so the window ends here without a final turn.
+                # The next turn would be longer, so this window ends without a final answer.
                 context_overflow = True
                 response = ""
                 total_rounds += 1
@@ -424,7 +432,7 @@ class EEGAgent:
 
 
 if __name__ == "__main__":
-    # Planner credentials and model come from .env (local Ollama by default).
+    # Model and endpoint come from .env. Local Ollama is the default.
     agent = EEGAgent(
         config_path="config/config.json",
         file_name="gped_049_a_6.edf",

@@ -20,12 +20,14 @@ from utils.parseCalling import (  # noqa: E402
 
 
 def expect(condition: bool, detail: str) -> None:
+    """Exit on the first failed check and print a PASS line otherwise."""
     if not condition:
         raise SystemExit(f"[FAIL] {detail}")
     print(f"[PASS] {detail}")
 
 
 def main() -> None:
+    """Check lenient ARGS parsing and TUEV event extraction."""
     single = extract_tool_calls(
         "<FUNCTION> seizureNormalModel_OneSecond\n"
         "<ARGS> {'name': ['FP1-F7', 'F7-T3'], 'start': 0, 'end': 10}\n"

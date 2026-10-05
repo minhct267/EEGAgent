@@ -16,25 +16,31 @@ from .embedder import BGEEmbedder
 
 
 class FaissIndexer:
+    """Inner-product FAISS index kept in step with the chunk texts."""
+
     def __init__(self, dim: int):
         self.index = faiss.IndexFlatIP(dim)
         self.texts = []
 
     def add(self, vectors, texts):
+        """Append vectors and the chunk strings they came from."""
         self.index.add(np.array(vectors).astype("float32"))
         self.texts.extend(texts)
 
     def save(self, index_path: str, text_path: str):
+        """Write the index and the matching chunk list to disk."""
         faiss.write_index(self.index, index_path)
         with open(text_path, "wb") as f:
             pickle.dump(self.texts, f)
 
     def load(self, index_path: str, text_path: str):
+        """Replace this index with one previously saved by save()."""
         self.index = faiss.read_index(index_path)
         with open(text_path, "rb") as f:
             self.texts = pickle.load(f)
 
     def reset(self):
+        """Drop every vector and chunk, keeping the same dimension."""
         self.index = faiss.IndexFlatIP(self.index.d)
         self.texts = []
 
@@ -52,6 +58,7 @@ def ensure_nltk_punkt() -> None:
 
 
 def _resolve_rag_paths(docs_dir, index_path, text_path, registry_path):
+    """Turn paths relative to this file into absolute RAG paths."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     return (
         os.path.join(current_dir, docs_dir),

@@ -1,3 +1,4 @@
+"""Channel-name tables for the TUEV bipolar montage, the MDD set, and Sleep-EDF."""
 bipolar_pairs = [
     ('FP1', 'F7'), ('F7', 'T3'), ('T3', 'T5'), ('T5', 'O1'),
     ('FP2', 'F8'), ('F8', 'T4'), ('T4', 'T6'), ('T6', 'O2'),
@@ -10,7 +11,7 @@ bipolar_pairs = [
 index2name = {i: f"{pair[0]}-{pair[1]}" for i, pair in enumerate(bipolar_pairs)}
 index2name_ = {i: f"{pair[1]}-{pair[0]}" for i, pair in enumerate(bipolar_pairs)}
 name2index = {**{v: k for k, v in index2name.items()},
-              **{v: k for k, v in index2name_.items()}}
+              **{v: k for k, v in index2name_.items()}}  # Accept both A-B and reversed B-A.
 
 
 single_polar = [

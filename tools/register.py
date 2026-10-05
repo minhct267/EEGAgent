@@ -14,102 +14,74 @@ TYPE_MAP = {
 }
 
 class FunctionRegistry:
-    """
-    A registry class for functions.
-    Stores functions and their metadata, and can generate JSON Schema
-    for use with large language models (LLMs).
-    """
+    """Store callables and the JSON schemas the planner is allowed to call."""
     def __init__(self):
-        # Store registered function objects, keyed by function name
         self.functions: Dict[str, Callable] = {}
-        # Store metadata for each function, including parameters, return type, description, etc.
         self.metadata: Dict[str, dict] = {}
 
     def register(self,
-                 name: Optional[str] = None,          # Optional registration name for the function
-                 description: str = "",               # Function description
-                 parameters: Optional[List[Dict]] = None,  # List of parameter dicts
-                 constraints: str = "",               # Parameter constraints or notes
-                 returns: Optional[Dict] = None):    # Return value schema
-        """
-        Decorator method for registering a function and its metadata.
-        """
+                 name: Optional[str] = None,
+                 description: str = "",
+                 parameters: Optional[List[Dict]] = None,
+                 constraints: str = "",
+                 returns: Optional[Dict] = None):
+        """Decorator that records a function and the schema shown to the planner."""
         def decorator(func: Callable):
             nonlocal name
             if name is None:
-                name = func.__name__  # Default to function's actual name
+                name = func.__name__
 
-            # Build the parameters JSON Schema
-            properties = {}  # Dict to store parameter type and description
-            required = []    # List of required parameter names
+            properties = {}
+            required = []
             for p in parameters or []:
                 param_name = p["name"]
                 properties[param_name] = {
-                    "type": p["type"],                # Parameter type
-                    "description": p.get("description"),  # Parameter description
+                    "type": p["type"],
+                    "description": p.get("description"),
                 }
-                if p.get("required", True):  # Default is required
+                if p.get("required", True):  # Omitted "required" means the planner must supply it.
                     required.append(param_name)
 
             schema = {
-                "type": "object",     # Parameters are represented as an object
+                "type": "object",
                 "properties": properties,
                 "required": required
             }
 
-            # Handle return value information
             if returns:
-                return_info = returns  # Use user-provided return info if available
+                return_info = returns
             else:
-                # Infer return type from type hints
+                # Fall back to the function's return annotation when the decorator omits one.
                 return_type = TYPE_MAP.get(get_type_hints(func).get('return'), 'object')
                 return_info = {
                     "type": return_type
                 }
 
-            # Register the function object
             self.functions[name] = func
-            # Register the function metadata
             self.metadata[name] = {
-                "name": name,              # Function name
-                "description": description,  # Description
-                "parameters": schema,        # Parameter JSON Schema
-                "constraints": constraints,  # Constraints or additional notes
-                "returns": return_info       # Return value schema
+                "name": name,
+                "description": description,
+                "parameters": schema,
+                "constraints": constraints,
+                "returns": return_info
             }
-            return func  # Return the original function
+            return func
         return decorator
 
     def get_function(self, name: str) -> Callable:
-        """Get the function object by name"""
+        """Return the callable registered under this name, or None."""
         return self.functions.get(name)
 
     def get_metadata(self, name: str) -> dict:
-        """Get the metadata for a function by name"""
+        """Return the schema metadata for a registered name, or None."""
         return self.metadata.get(name)
 
     def list_functions(self) -> list:
-        """List all registered function names"""
+        """Return every registered function name."""
         return list(self.functions.keys())
 
     def export_tool_schemas(self) -> list:
-        """
-        Export all registered functions in the "tool_call" format for LLMs.
-        Returns a list of dicts like:
-        [
-            {
-                "type": "function",
-                "function": {
-                    "name": ...,
-                    "description": ...,
-                    "constraints": ...,
-                    "parameters": {...},
-                    "returns": {...}
-                }
-            },
-            ...
-        ]
-        """
+        """Export every registered tool as an LLM function-call schema."""
         return [
             {
                 "type": "function",
@@ -124,5 +96,5 @@ class FunctionRegistry:
             for meta in self.metadata.values()
         ]
 
-# Instantiate the function registry
+# Shared registry. Tool modules fill it when the tools package is imported.
 function_register = FunctionRegistry()

@@ -4,6 +4,7 @@ from .register import function_register
 
 # Import every submodule so @function_register decorators run at package load.
 def import_all_modules(package):
+    """Import each tools submodule so its functions register themselves."""
     for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
         importlib.import_module(module_name)
 

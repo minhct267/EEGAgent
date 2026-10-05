@@ -22,6 +22,7 @@ from utils.messageMerge import messageMerge
 
 
 def expect(condition: bool, detail: str) -> None:
+    """Exit on the first failed check and print a PASS line otherwise."""
     if not condition:
         raise SystemExit(f"[FAIL] {detail}")
     print(f"[PASS] {detail}")
@@ -84,6 +85,7 @@ TOOL_CALL = (
 
 
 def _agent(harness, client=None, prompt_mode="authors"):
+    """Build an EEGAgent without loading an EDF, using a scripted planner client."""
     agent = EEGAgent.__new__(EEGAgent)
     agent.model = "fake"
     agent.timeout = 5
@@ -116,6 +118,7 @@ def _agent(harness, client=None, prompt_mode="authors"):
 
 
 def check_stop_and_placement() -> None:
+    """Stop markers are stripped, and tool results become a user turn under authors_v2."""
     trimmed, hit = truncate_at_stop("call <RETURN> fake", ("<RETURN>",))
     expect(hit and trimmed == "call", "Stop marker is removed from the stored text")
 
@@ -146,6 +149,7 @@ def check_stop_and_placement() -> None:
 
 
 def check_notes_and_parsers() -> None:
+    """Notes appear only in strict mode, and the two parsers disagree on bad ARGS."""
     item = [{"name": "seizureNormalModel_OneSecond", "args": {"start": 0}, "return": {"ok": True}}]
     plain, noted = [], []
     messageMerge(item, plain, as_user=True, notes=False)
@@ -175,6 +179,7 @@ def check_notes_and_parsers() -> None:
 
 
 def check_authors_prompt() -> None:
+    """The authors prompt shows the frozen tool text, and the strict prompt shows the live text."""
     live = function_register.export_tool_schemas()
     frozen = authors_tool_schemas(live)
     expect([s["function"]["name"] for s in frozen] == [s["function"]["name"] for s in live],
@@ -188,6 +193,7 @@ def check_authors_prompt() -> None:
 
 
 def check_native_client() -> None:
+    """The native client posts options to /api/chat and raises on context overflow."""
     expect(default_planner_api("http://127.0.0.1:11434/v1") == "ollama_native", "Local Ollama uses the native API")
     expect(default_planner_api("https://dashscope.aliyuncs.com/compatible-mode/v1") == "openai", "Other hosts use /v1")
 
@@ -239,6 +245,7 @@ def check_native_client() -> None:
 
 
 def check_context_guards() -> None:
+    """A shrinking prompt is flagged, and overflow ends the window."""
     agent = _agent(HARNESS_AUTHORS_V2, FakeClient("No events found", prompt_tokens=[4000, 9000, 120]))
     agent.messages.append({"role": "user", "content": "q"})
     for _ in range(3):
@@ -254,6 +261,7 @@ def check_context_guards() -> None:
 
 
 def main() -> None:
+    """Run every harness check."""
     check_stop_and_placement()
     check_notes_and_parsers()
     check_authors_prompt()

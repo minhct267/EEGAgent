@@ -56,6 +56,7 @@ class ResolvedProtocol:
     source_path: str
 
     def sampling_overrides(self) -> dict:
+        """Sampling fields that replace the values loaded from the environment."""
         return {
             "temperature": self.temperature,
             "top_p": self.top_p,
@@ -66,6 +67,7 @@ class ResolvedProtocol:
         }
 
     def as_dict(self) -> dict:
+        """JSON-ready copy of the protocol, including the harness flags."""
         return {
             "name": self.name,
             "question_template": self.question_template,
@@ -87,6 +89,7 @@ class ResolvedProtocol:
 
 
 def protocol_path(name_or_path: str) -> Path:
+    """Resolve a protocol filename or a name under config/protocols."""
     candidate = Path(name_or_path)
     if candidate.is_file():
         return candidate.resolve()
@@ -97,6 +100,7 @@ def protocol_path(name_or_path: str) -> Path:
 
 
 def load_protocol_file(name_or_path: str) -> dict:
+    """Load a protocol JSON and record the path it was read from."""
     path = protocol_path(name_or_path)
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -105,6 +109,7 @@ def load_protocol_file(name_or_path: str) -> dict:
 
 
 def _tool_names(raw, prompt_mode: str) -> tuple[str, ...] | None:
+    """Strict mode always uses the discharge tools. Authors mode uses the file list, or every tool."""
     if prompt_mode == "strict":
         return tuple(DISCHARGE_TOOL_NAMES)
     if raw is None:
@@ -160,6 +165,7 @@ def resolve_protocol(
 
 
 def apply_protocol_settings(protocol: ResolvedProtocol, base: PlannerSettings | None = None) -> PlannerSettings:
+    """Copy planner settings and overwrite them with this protocol's sampling."""
     from dataclasses import replace
 
     settings = base or get_planner_settings()
@@ -167,6 +173,7 @@ def apply_protocol_settings(protocol: ResolvedProtocol, base: PlannerSettings | 
 
 
 def prompt_fingerprint(protocol: ResolvedProtocol) -> str:
+    """Stable hash of the protocol text and flags, ignoring the source path."""
     payload = protocol.as_dict()
     payload.pop("source_path", None)
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -174,6 +181,7 @@ def prompt_fingerprint(protocol: ResolvedProtocol) -> str:
 
 
 def sha256_file(path: Path) -> str | None:
+    """Hash a file for the run manifest, or return None when it is missing."""
     if not path.is_file():
         return None
     digest = hashlib.sha256()
@@ -184,6 +192,7 @@ def sha256_file(path: Path) -> str | None:
 
 
 def git_state(root: Path | None = None) -> dict:
+    """Record HEAD and whether the worktree is dirty. Missing git returns nulls."""
     work = root or PROJECT_ROOT
     try:
         commit = subprocess.check_output(
@@ -198,6 +207,7 @@ def git_state(root: Path | None = None) -> dict:
 
 
 def _ollama_root(base_url: str) -> str:
+    """Drop a trailing /v1 so the URL points at the native Ollama API."""
     root = (base_url or "").rstrip("/")
     if root.endswith("/v1"):
         root = root[: -len("/v1")]
@@ -205,6 +215,7 @@ def _ollama_root(base_url: str) -> str:
 
 
 def _ollama_json(base_url: str, path: str, payload: dict | None = None, timeout: float = 15.0) -> dict:
+    """GET or POST one Ollama endpoint and return the JSON body."""
     url = _ollama_root(base_url) + path
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
@@ -213,6 +224,7 @@ def _ollama_json(base_url: str, path: str, payload: dict | None = None, timeout:
 
 
 def _match_model(listed: dict, model: str) -> bool:
+    """True when an /api/tags entry is this model, with or without :latest."""
     names = {listed.get("name") or "", listed.get("model") or ""}
     bare = {item.replace(":latest", "") for item in names if item}
     return model in names or model.replace(":latest", "") in bare
@@ -252,6 +264,7 @@ def ollama_model_digest(base_url: str, model: str) -> dict:
 
 
 def build_manifest(protocol: ResolvedProtocol, settings: PlannerSettings, file_stems: list[str], config_path: str) -> dict:
+    """Snapshot the protocol, model digest, index hashes, and file list for one run."""
     embed_settings = None
     try:
         from llm_settings import get_embed_settings
@@ -295,5 +308,6 @@ def build_manifest(protocol: ResolvedProtocol, settings: PlannerSettings, file_s
 
 
 def write_manifest(path: Path, manifest: dict) -> None:
+    """Write the run manifest as indented JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")

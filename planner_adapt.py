@@ -1,8 +1,4 @@
-"""Harness flags and TUEV prompt rules.
-
-Tool-result placement, stop sequences, empty retries, and the final-answer
-turn come from a HarnessConfig. They are not selected by model name.
-"""
+"""Shared harness flags for tool results, stop strings, retries, and the final turn."""
 
 from __future__ import annotations
 
@@ -57,8 +53,8 @@ class HarnessConfig:
     stop: tuple
     empty_retry: bool
     force_final: bool
-    # "authors": the original regex + json.loads, bad calls dropped silently.
-    # "repaired": lenient ARGS parsing, and bad or unknown calls are returned as errors.
+    # "authors": original regex and json.loads; bad calls are dropped with no feedback.
+    # "repaired": lenient ARGS parsing; bad or unknown calls come back as tool errors.
     tool_calls: str
 
 
@@ -87,6 +83,7 @@ HARNESSES = {
 
 
 def resolve_harness(name: str | None) -> HarnessConfig:
+    """Return the named harness. authors_v2 is the default."""
     key = (name or "authors_v2").strip()
     if key not in HARNESSES:
         known = ", ".join(sorted({"authors_v1", "authors_v2"}))
@@ -95,6 +92,7 @@ def resolve_harness(name: str | None) -> HarnessConfig:
 
 
 def thinking_is_disabled(reasoning_effort: str | None) -> bool:
+    """True when reasoning_effort is empty or one of none/off/disabled."""
     return (reasoning_effort or "").strip().lower() in DISABLED_THINKING
 
 
@@ -137,10 +135,12 @@ FORCE_FINAL_MESSAGE = (
 
 
 def dump_tool_schemas(tool_meta) -> str:
+    """Pretty-print tool schemas for the strict system prompt."""
     return json.dumps(tool_meta, ensure_ascii=False, indent=2)
 
 
 def filter_tool_schemas(schemas: list, names: tuple[str, ...] | list[str] | None) -> list:
+    """Keep only the named tools. None keeps every registered schema."""
     if not names:
         return schemas
     allowed = set(names)

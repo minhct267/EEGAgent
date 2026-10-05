@@ -60,6 +60,7 @@ for _canonical in CHANNEL_MAP.values():
 
 
 def parse_file_list(raw: str | None) -> set[str] | None:
+    """Read stems from a text file or a comma-separated string. Lines starting with # are skipped."""
     if not raw:
         return None
     path = Path(raw)
@@ -73,6 +74,7 @@ def parse_file_list(raw: str | None) -> set[str] | None:
 
 
 def find_rec_edf_pairs(data_dir, allowed=None):
+    """Pair each .rec annotation file with the .edf that shares its stem."""
     data_dir = Path(data_dir).resolve()
     rec_paths = sorted(data_dir.rglob("*.rec"))
     edf_by_stem = {path.stem: path.resolve() for path in data_dir.rglob("*.edf")}
@@ -96,6 +98,7 @@ def find_rec_edf_pairs(data_dir, allowed=None):
 
 
 def merge_rec_rows(input_file, gap_threshold=MERGE_GAP_THRESHOLD):
+    """Merge .rec rows that share a channel and class when the gap is within the threshold."""
     df = pd.read_csv(input_file, header=None, names=["channel", "start", "end", "class"])
     df["channel"] = df["channel"].astype(int)
     df["class"] = df["class"].astype(int)
@@ -117,6 +120,7 @@ def merge_rec_rows(input_file, gap_threshold=MERGE_GAP_THRESHOLD):
 
 
 def candidate_windows(merged_df, gap_threshold=MERGE_GAP_THRESHOLD):
+    """Collapse merged events into the time spans the agent is asked about."""
     windows = []
     current_start, current_end = None, None
     for start, end in merged_df[["start", "end"]].sort_values("start").values.tolist():
@@ -133,6 +137,7 @@ def candidate_windows(merged_df, gap_threshold=MERGE_GAP_THRESHOLD):
 
 
 def build_questions(pairs):
+    """Build one question per merged window, using the raw start and end from the .rec file."""
     questions = []
     for pair in pairs:
         merged_df = merge_rec_rows(pair["rec"])
@@ -151,6 +156,7 @@ def build_questions(pairs):
 
 
 def load_ground_truth(pairs):
+    """Split merged events into positive classes 1-3 and explicit-negative classes 4-6."""
     gt_data = defaultdict(list)
     negative_data = defaultdict(list)
     for pair in pairs:
@@ -169,6 +175,7 @@ def load_ground_truth(pairs):
 
 
 def messages_jsonl_path(out_dir, stem):
+    """Path of the per-window transcript log for one recording."""
     return Path(out_dir) / stem / "messages" / f"{stem}.messages.jsonl"
 
 
@@ -195,6 +202,7 @@ def load_message_index(out_dir, stem):
 
 
 def load_resumed_logs(out_dir, stem):
+    """Return finished window indexes and their logs so a resume can skip them."""
     path = Path(out_dir) / stem / "agent_raw.jsonl"
     if not path.exists():
         return set(), []
@@ -208,7 +216,7 @@ def load_resumed_logs(out_dir, stem):
             record = json.loads(line)
             index = record["candidate_index"]
             transcript = messages.get(index)
-            # A raw line with no saved transcript is run again. The file rewrite drops the stale line.
+            # No saved transcript: run this window again. Rewriting the file drops the stale line.
             if transcript is None and not record.get("error"):
                 continue
             record["messages"] = transcript
@@ -220,6 +228,7 @@ def load_resumed_logs(out_dir, stem):
 
 
 def append_raw_log(out_dir, stem, log):
+    """Append one window record. The transcript is stored in the messages log, not here."""
     path = Path(out_dir) / stem / "agent_raw.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = {key: value for key, value in log.items() if key != "messages"}
@@ -228,6 +237,7 @@ def append_raw_log(out_dir, stem, log):
 
 
 def append_messages_log(out_dir, stem, log):
+    """Append the planner transcript for one window."""
     path = messages_jsonl_path(out_dir, stem)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -246,6 +256,7 @@ def append_messages_log(out_dir, stem, log):
 
 
 def _normalize_channel(name):
+    """Uppercase a channel name and remove spaces."""
     return re.sub(r"\s+", "", name).strip().upper()
 
 
@@ -260,6 +271,7 @@ def canonicalize_channel(name):
 
 
 def parse_events_detailed(raw_response):
+    """Pull (channel, start, end) tuples from an answer and separate unknown channels."""
     text = raw_response or ""
     events = []
     invalid = []
@@ -283,11 +295,13 @@ def parse_events_detailed(raw_response):
 
 
 def parse_events(raw_response):
+    """Return only events whose channels belong to the TUEV montage."""
     events, _invalid = parse_events_detailed(raw_response)
     return events
 
 
 def classify_answer(text, events, stopped_by_max_rounds):
+    """Label an answer as tuples, no_events, empty, max_rounds, or unparseable."""
     body = (text or "").strip()
     if events:
         return "tuples"
@@ -301,6 +315,7 @@ def classify_answer(text, events, stopped_by_max_rounds):
 
 
 def write_file_metrics(out_dir, edf_path, rec_path, stem, model, raw_logs, ground_truth, negative_labels):
+    """Score one recording and write its metrics, predictions, and transcripts."""
     raw_preds = [event for log in raw_logs for event in log.get("parsed_events", [])]
     file_metrics, _episodes, scored_episodes = score_predictions(
         ground_truth.get(edf_path, []),
@@ -327,6 +342,7 @@ def write_file_metrics(out_dir, edf_path, rec_path, stem, model, raw_logs, groun
 
 
 def print_aggregate(aggregate):
+    """Print the pooled hit rate and the unmatched-report rates."""
     print("Analysis complete.")
     print(f"Files: {aggregate.get('files', 0)}")
     print(f"Total report episodes: {aggregate.get('total_reports', 0)}")
@@ -343,6 +359,7 @@ def print_aggregate(aggregate):
 
 
 def _select_answer(raw_response, result):
+    """Prefer events in the visible reply, then fall back to the stored assistant text."""
     events, invalid = parse_events_detailed(raw_response)
     answer_text = raw_response or ""
     fallback = (result or {}).get("raw_assistant") or ""
@@ -410,6 +427,7 @@ def write_run_health(out_dir, planner):
 
 
 def run_eval(args):
+    """Run the protocol on every paired file and write the aggregate metrics."""
     protocol = resolve_protocol(
         name_or_path=args.protocol,
         harness=args.harness,
@@ -539,6 +557,7 @@ def run_eval(args):
 
 
 def main():
+    """Parse CLI flags, list the paired files, and start the evaluation unless mode is list."""
     load_env()
     parser = argparse.ArgumentParser(description="Evaluate EEGAgent on official TUEV eval .edf/.rec pairs.")
     parser.add_argument("--mode", choices=["list", "eval"], default="eval")

@@ -1,9 +1,4 @@
-"""Two-file check of the frozen TUEV baseline harness.
-
-Unit checks cover stop-sequence truncation. The live check runs two short TUEV
-files, then resumes that directory and confirms transcripts, the manifest, and
-context size.
-"""
+"""Run the harness unit checks, then a two-file TUEV eval and a resume of that same directory."""
 
 from __future__ import annotations
 
@@ -28,16 +23,19 @@ AUTHORS_TOOL_TEXT = "Use this tool to classify the type of artifact"
 
 
 def fail(detail: str) -> None:
+    """Stop the smoke test with a FAIL line."""
     raise SystemExit(f"[FAIL] {detail}")
 
 
 def run_unit_tests() -> None:
+    """Run the parser, scorer, and harness checks before any live eval."""
     for script in ("scripts/test_tuev_metrics.py", "scripts/test_harness.py", "scripts/test_parse_calling.py"):
         print(f"=== {script}")
         subprocess.check_call([PY, script], cwd=PROJECT_ROOT)
 
 
 def choose_files(data_dir: str) -> list[str]:
+    """Pick the two recordings with the fewest candidate windows."""
     pairs = find_rec_edf_pairs(data_dir)
     questions = build_questions(pairs)
     counts: dict[str, int] = {}
@@ -52,6 +50,7 @@ def choose_files(data_dir: str) -> list[str]:
 
 
 def eval_command(file_list: Path, resume: bool) -> list[str]:
+    """Build the TUEV_eval command for the smoke directory."""
     command = [
         PY,
         "TUEV_eval.py",
@@ -72,6 +71,7 @@ def eval_command(file_list: Path, resume: bool) -> list[str]:
 
 
 def message_rows(out_dir: Path) -> list[dict]:
+    """Read every per-window transcript written under the smoke directory."""
     rows = []
     for path in sorted(out_dir.glob("*/messages/*.messages.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -81,6 +81,7 @@ def message_rows(out_dir: Path) -> list[dict]:
 
 
 def assert_run(out_dir: Path) -> int:
+    """Check the manifest, transcripts, stop behavior, and loaded context. Returns the row count."""
     manifest_path = out_dir / "manifest.json"
     if not manifest_path.is_file():
         fail("manifest.json was not written")
@@ -156,6 +157,7 @@ def assert_run(out_dir: Path) -> int:
 
 
 def main() -> None:
+    """Run the unit checks, a two-file eval, and a resume that must not drop transcripts."""
     load_env()
     run_unit_tests()
     data_dir = os.environ.get("TUEV_DATA_DIR")

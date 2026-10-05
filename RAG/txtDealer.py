@@ -33,4 +33,4 @@ with open("glossary_clean.txt", "w", encoding="utf-8") as f:
     for term, desc in results:
         f.write(f"{term}: {desc}\n\n")
 
-print(f"✅ 共提取 {len(results)} 个术语，结果已保存到 glossary_clean.txt")
+print(f"Extracted {len(results)} terms. Saved to glossary_clean.txt")

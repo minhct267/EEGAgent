@@ -1,3 +1,4 @@
+"""Train the healthy-vs-MDD CNN on the windows written by predeal.py."""
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,6 +9,7 @@ import os
 import torch.nn.init as init
 
 def init_weights_health(m):
+    """Kaiming init for conv layers and Xavier init for the linear head."""
     if isinstance(m, nn.Conv1d):
         init.kaiming_normal_(m.weight, nonlinearity='relu')
         if m.bias is not None:
@@ -23,6 +25,7 @@ def init_weights_health(m):
 
 
 class healthMDD(nn.Module):
+    """CNN that scores one window as healthy or MDD."""
     def __init__(self, n_channels=19, n_samples=1280, hidden=64, p=0.):
         super().__init__()
         self.conv = nn.Sequential(
@@ -44,10 +47,11 @@ class healthMDD(nn.Module):
         self.fc = nn.Linear(hidden, 2)
 
     def forward(self, x):
-        x = self.conv(x).flatten(1) # (32, 48, 49)
+        x = self.conv(x).flatten(1)  # (batch, hidden)
         return self.fc(x)
 
 def train_model(model, train_loader, test_loader, epochs=10, lr=1e-3, device='cpu'):
+    """Train with AdamW and score the test set after every epoch."""
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -85,6 +89,7 @@ def train_model(model, train_loader, test_loader, epochs=10, lr=1e-3, device='cp
 best_f1 = 0
 
 def test_model(model, test_loader, device='cpu', class_names=None):
+    """Score the test loader and save a checkpoint when macro-F1 improves past 0.84."""
     global best_f1  
     model.eval()
     all_preds, all_labels = [], []
@@ -134,4 +139,4 @@ if __name__ == "__main__":
     model.apply(init_weights_health)
     train_model(model, train_loader, test_loader, epochs=20, lr=1e-4, device='cuda')
 
-    # 93 94
+# Previous run: accuracy 93, macro-F1 94.

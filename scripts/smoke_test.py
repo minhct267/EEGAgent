@@ -67,6 +67,7 @@ def _list_local_models(base_url: str) -> list[str]:
 
 
 def phase_env() -> None:
+    """Check that Ollama is up and the configured planner and embedding models are listed."""
     load_env()
     embed = get_embed_settings()
     planner = get_planner_settings()
@@ -100,6 +101,7 @@ def phase_env() -> None:
 
 
 def phase_planner() -> None:
+    """Send a one-word prompt and require a non-empty reply."""
     ready, detail = planner_is_ready()
     if not ready:
         _fail("planner", detail)
@@ -118,6 +120,7 @@ def phase_planner() -> None:
 
 
 def phase_embed() -> None:
+    """Require 1024-d unit vectors, with identical texts closer than an unrelated sentence."""
     embedder = BGEEmbedder()
     vectors = embedder.encode(
         [
@@ -141,6 +144,7 @@ def phase_embed() -> None:
 
 
 def phase_rag() -> None:
+    """Search the FAISS index and require the top hit to clear the similarity threshold."""
     if not INDEX_PATH.exists() or not CHUNKS_PATH.exists():
         _fail("rag", "FAISS index is missing. Run: python -m RAG.indexer --rebuild")
     if REGISTRY_PATH.exists():
@@ -172,6 +176,7 @@ def phase_rag() -> None:
 
 
 def phase_tools() -> None:
+    """Load the sample EDF and run amplitude plus the 1-second seizure tool."""
     with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
         config = json.load(handle)
     data = dataLoad(str(SAMPLE_EDF), config)
@@ -186,6 +191,7 @@ def phase_tools() -> None:
 
 
 def phase_agent() -> None:
+    """Run one planner question and require a parseable tool call plus a final reply."""
     ready, detail = planner_is_ready()
     if not ready:
         _fail("agent", detail)
@@ -227,6 +233,7 @@ PHASE_FUNCS = {
 
 
 def parse_phases(raw: str) -> list[str]:
+    """Split a comma-separated phase list. 'all' selects every phase."""
     if raw.strip().lower() == "all":
         return list(ALL_PHASES)
     phases = []
@@ -242,6 +249,7 @@ def parse_phases(raw: str) -> list[str]:
 
 
 def main() -> None:
+    """Run the requested smoke-test phases in order."""
     parser = argparse.ArgumentParser(description="Smoke-test EEGAgent after the Ollama migration.")
     parser.add_argument(
         "--phase",

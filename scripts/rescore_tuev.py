@@ -1,9 +1,4 @@
-"""Re-score a TUEV run with scorer v2 without calling the planner.
-
-Coverage hits are recomputed from stored predictions and checked against the
-metrics saved in each agent_predictions.jsonl. A second block re-parses
-raw_response with the current channel canonicalizer when those logs exist.
-"""
+"""Re-score saved TUEV predictions with scorer v2, and re-parse raw answers when those logs exist."""
 
 from __future__ import annotations
 
@@ -21,14 +16,17 @@ from utils.tuev_metrics import aggregate_summaries, score_predictions, summarize
 
 
 def _git_bytes(commit: str, path: str) -> bytes:
+    """Read one file from a commit without checking it out."""
     return subprocess.check_output(["git", "show", f"{commit}:{path}"], cwd=PROJECT_ROOT)
 
 
 def _git_text(commit: str, path: str) -> str:
+    """Read one UTF-8 file from a commit."""
     return _git_bytes(commit, path).decode("utf-8")
 
 
 def prediction_paths_from_dir(run_dir: Path) -> list[tuple[str, str]]:
+    """Return (stem, file text) for every agent_predictions.jsonl under the run."""
     found = []
     for path in sorted(run_dir.glob("*/agent_predictions.jsonl")):
         found.append((path.parent.name, path.read_text(encoding="utf-8")))
@@ -36,6 +34,7 @@ def prediction_paths_from_dir(run_dir: Path) -> list[tuple[str, str]]:
 
 
 def prediction_paths_from_git(commit: str, prefix: str) -> list[tuple[str, str]]:
+    """Same as prediction_paths_from_dir, reading the files from a commit."""
     listing = subprocess.check_output(
         ["git", "ls-tree", "-r", "--name-only", commit, prefix],
         cwd=PROJECT_ROOT,
@@ -49,6 +48,7 @@ def prediction_paths_from_git(commit: str, prefix: str) -> list[tuple[str, str]]
 
 
 def raw_text_for(stem: str, run_dir: Path | None, commit: str | None, prefix: str | None) -> str | None:
+    """Load agent_raw.jsonl for one stem from disk or from git."""
     if run_dir is not None:
         path = run_dir / stem / "agent_raw.jsonl"
         if path.is_file():
@@ -62,6 +62,7 @@ def raw_text_for(stem: str, run_dir: Path | None, commit: str | None, prefix: st
 
 
 def _loads_lines(text: str) -> list[dict]:
+    """Parse a JSONL string, skipping blank lines."""
     rows = []
     for line in text.splitlines():
         if line.strip():
@@ -70,6 +71,7 @@ def _loads_lines(text: str) -> list[dict]:
 
 
 def _stored_predictions(rows: list[dict]) -> tuple[list, list, list, int | None]:
+    """Take ground truth, negatives, predictions, and the saved hit count from the last row."""
     if not rows:
         return [], [], [], None
     row = rows[-1]
@@ -86,6 +88,7 @@ def _stored_predictions(rows: list[dict]) -> tuple[list, list, list, int | None]
 
 
 def _summary_for(stem: str, gt_events, negative_events, predictions) -> tuple[dict, dict]:
+    """Score one file and return the aggregate-ready summary plus the full metrics."""
     metrics, _episodes, _scored = score_predictions(gt_events, negative_events, predictions)
     summary = summarize_metrics(metrics, metrics.get("model"))
     summary["stem"] = stem
@@ -94,6 +97,7 @@ def _summary_for(stem: str, gt_events, negative_events, predictions) -> tuple[di
 
 
 def _reparsed_predictions(raw_text: str) -> tuple[list, list]:
+    """Parse stored answers again with the current channel canonicalizer."""
     from TUEV_eval import parse_events_detailed
 
     predictions = []
@@ -111,6 +115,7 @@ def _reparsed_predictions(raw_text: str) -> tuple[list, list]:
 
 
 def rescore(records: list[tuple[str, str]], raw_lookup, stems: set[str] | None) -> dict:
+    """Recompute coverage from stored predictions and, when raw logs exist, from re-parsed answers."""
     stored_summaries = []
     reparsed_summaries = []
     mismatches = []
@@ -165,10 +170,12 @@ def rescore(records: list[tuple[str, str]], raw_lookup, stems: set[str] | None) 
 
 
 def _stems_from_git(commit: str, prefix: str) -> set[str]:
+    """Stems that have an agent_predictions.jsonl in this commit."""
     return {stem for stem, _text in prediction_paths_from_git(commit, prefix)}
 
 
 def main() -> None:
+    """Re-score a run directory or a git commit and write the JSON report."""
     parser = argparse.ArgumentParser(description="Re-score a saved TUEV run with scorer v2.")
     parser.add_argument("--run-dir", type=Path, default=None, help="Directory of per-file agent_predictions.jsonl.")
     parser.add_argument("--git", default=None, help="Commit to read, for example acd2e6a.")

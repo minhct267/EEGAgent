@@ -1,3 +1,4 @@
+"""Build the authors and strict system prompts from EEG info and tool schemas."""
 import json
 from functools import lru_cache
 from pathlib import Path

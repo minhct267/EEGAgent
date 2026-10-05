@@ -6,23 +6,20 @@ from .localModels.vote import multi_model_predict
 from tools import function_register
 
 def compute_stft_spectrogram(x, n_fft=256, hop_length=128):
-    """
-    x: Tensor of shape (B, 22, T=2560)
-    returns: Tensor of shape (B, 22, F=n_fft//2+1, T'=~20)
-    """
+    """Per-channel magnitude STFT. Input (B, 22, T); output (B, 22, freq, time)."""
     B, C, T = x.shape
     x = x.view(B * C, T)
-    # STFT: (B*C, F, T') with complex numbers
-    spec = torch.stft(
+    spec = torch.stft(  # Complex STFT, shape (B*C, freq, time).
         x, n_fft=n_fft, hop_length=hop_length,
         return_complex=True, window=torch.hann_window(n_fft, device=x.device)
     )
     mag = spec.abs()
-    mag = mag.view(B, C, *mag.shape[1:])  # (B, 22, F, T')
+    mag = mag.view(B, C, *mag.shape[1:])  # (B, 22, freq, time)
     
-    return mag  # shape: (B, 22, F, T')
+    return mag
 
 class slowSeizureBckgEEG(nn.Module):
+    """10-second montage classifier: STFT, conv encoder, then rotary attention over time."""
     def __init__(self, cls=3, embed_dim=128, num_heads=4):
         super().__init__()
         self.embed_dim = embed_dim
@@ -48,11 +45,11 @@ class slowSeizureBckgEEG(nn.Module):
 
     def forward(self, x):
         B, _, _ = x.shape
-        x = compute_stft_spectrogram(x).permute(0,3,1,2).flatten(0, 1) # B*T, 22, F
+        x = compute_stft_spectrogram(x).permute(0,3,1,2).flatten(0, 1)  # (B*time, 22, freq)
         x = self.conv(x).squeeze(2).reshape(B, -1, self.embed_dim)
         for layer in self.attn_layers:
-            x, _  = layer(x)  # v = x
-        x = self.pool(x).squeeze(1)  # [B, C]
+            x, _  = layer(x)  # Drop the attention weights.
+        x = self.pool(x).squeeze(1)  # (B, embed_dim)
 
         x = self.fc(x)
         return x
@@ -116,9 +113,10 @@ for i, path in enumerate(slowSeizBckgEEGModel_paths):
     }
 )
 def slowSeizBckgModel_TenSeconds(start: int, end: int, config):
+    """Score each complete 10-second epoch in [start, end] as background, slow, or seizure."""
     fs = config['fs']
     N = (end- start) // 10
-    data = getRegisteredData(start, start+10*N, config) # shape: (C, T)
+    data = getRegisteredData(start, start+10*N, config)  # (channels, samples). Remainder under 10 s is dropped.
 
     infos = []
     for i in range(N):
@@ -128,7 +126,7 @@ def slowSeizBckgModel_TenSeconds(start: int, end: int, config):
         info = {}
         info['duration'] = f"{start + i * 10}s-{start + (i + 1) * 10}s"
 
-        data_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)  # (1, C, T)
+        data_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)  # (1, channels, samples)
         probs = multi_model_predict(slowSeizBckgModels, data_tensor)
 
         info['Prob'] = {

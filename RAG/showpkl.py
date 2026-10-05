@@ -1,3 +1,4 @@
+"""Print how many text chunks are in chunks.pkl and flag any empty ones."""
 import pickle
 
 

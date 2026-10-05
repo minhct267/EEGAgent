@@ -34,6 +34,7 @@ from skimage.metrics import structural_similarity as ssim
     }
 )
 def compute_amplitude(name: List[str], start: int, end: int, config):
+    """Mean absolute, RMS, and peak amplitude on each named channel. Window must be <= 60 s."""
     if end - start > 60:
         raise ValueError("The time interval between start and end should not exceed 60 seconds.")
     data = getRegisteredData(start, end, config)
@@ -76,6 +77,7 @@ def compute_amplitude(name: List[str], start: int, end: int, config):
     }
 )
 def compute_psd(name: List[str], start: int, end: int, config):
+    """Band-limited Welch power on each named channel. Window must be <= 60 s."""
     if end - start > 60:
         raise ValueError("The time interval between start and end should not exceed 60 seconds.")
     data = getRegisteredData(start, end, config)
@@ -121,6 +123,7 @@ def compute_psd(name: List[str], start: int, end: int, config):
     }
 )
 def compute_symmetry(channel_pairs: List[Tuple[str, str]], start: int, end: int, config):
+    """Pearson correlation and SSIM for each left-right pair. Window must be <= 60 s."""
     if end - start > 60:
         raise ValueError("The time interval between start and end should not exceed 60 seconds.")
     if channel_pairs is None:

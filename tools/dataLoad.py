@@ -1,3 +1,4 @@
+"""Load an EDF into the channel layout expected by the EEG tools."""
 import mne
 import numpy as np
 import regex as re
@@ -5,8 +6,8 @@ from .preprocessing import preprocessing
 from .polar import bipolar_pairs, single_polar, sleep_polar
 mne.set_log_level('WARNING')
 
-# Match an EDF channel name by prefix for bipolar subtraction.
 def match_channel(prefix, channel_list):
+    """Return the first channel whose name starts with prefix."""
     pattern = re.compile(rf'^{prefix}')
     for ch in channel_list:
         if pattern.match(ch):
@@ -14,6 +15,7 @@ def match_channel(prefix, channel_list):
     return None
 
 def get_data(raw):
+    """Build the 22 TUEV bipolar channels by subtracting each matched EEG pair."""
     data = []
     raw_channels = raw.ch_names  # Names as stored in the EDF.
     for ch1_prefix, ch2_prefix in bipolar_pairs:
@@ -25,21 +27,24 @@ def get_data(raw):
 
 
 def dataLoad(file_path, config):
+    """Filter the EDF and return the TUEV bipolar montage used by the seizure tools."""
     raw = mne.io.read_raw_edf(file_path, preload=True)
     raw = preprocessing(raw, config)
     data = get_data(raw)
     return data
 
 def load_MDD_edf(file_path, config):
+    """Return the 19 referential channels used by the MDD model. Shape (channels, samples)."""
     raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
     names = ["EEG " + name + "-LE" for name in single_polar]
     raw.pick(names)
-    data = raw.get_data()  # shape: [channels, time_samples]
+    data = raw.get_data()  # (channels, samples)
     return np.array(data) 
 
 def load_Sleep_edf(file_path, config):
+    """Return the two Sleep-EDF channels. Shape (channels, samples)."""
     raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
     names = ["EEG " + name for name in sleep_polar]
     raw.pick(names)
-    data = raw.get_data()  # shape: [channels, time_samples]
+    data = raw.get_data()  # (channels, samples)
     return np.array(data) 

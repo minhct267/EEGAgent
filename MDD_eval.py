@@ -1,3 +1,4 @@
+"""Ask the agent whether each eyes-closed recording is MDD and score Yes/No against the label."""
 import os
 import json
 import time
@@ -19,7 +20,7 @@ data_dir = "./eval/MDD/raw"
 save_dir = "./eval/eval_logs"   
 os.makedirs(save_dir, exist_ok=True)
 
-# === file list ===
+# Held-out eyes-closed files. H is healthy (0), MDD is patient (1).
 subject_files = []
 for subj in test_subjects:
     group, sid = subj.split("_")
@@ -31,7 +32,7 @@ for subj in test_subjects:
         "label": label
     })
 
-# === evaluation ===
+# One agent call per subject. Yes maps to MDD, No maps to healthy.
 results = []
 question = "Determine whether the subject is a patient with MDD. Please respond with Yes or No."
 
@@ -75,7 +76,7 @@ for subj in subject_files:
         json.dump(record, f, ensure_ascii=False, indent=2)
     print(f"Saved full conversation to {save_path}")
 
-### === summary === ###
+# Accuracy and F1 on replies that were Yes or No. Unparsed replies are left out.
 summary_path = os.path.join(save_dir, "all_results_summary.json")
 with open(summary_path, "w", encoding="utf-8") as f:
     json.dump(results, f, ensure_ascii=False, indent=2)
