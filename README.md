@@ -4,8 +4,6 @@ Scalable and generalizable analysis of brain activity is essential for advancing
 # EEGAgent Framwork
 ![EEGAgent Framework](framework.png)
 
-See [docs/Note.md](docs/Note.md) for setup, test, and eval commands, and [docs/overview.md](docs/overview.md) for a high-level map of the system.
-
 # Project Structure
 ```
 EEGAgent/
@@ -83,28 +81,28 @@ EEGAgent/
    └─ __pycache__/
 ```
 
-# note
+# Notes
 ## Adding New Tools
-Model-based tools
+Model-based tools:
 Add the .pth weight files under tools/localModels/, and create a corresponding Python file in /tools/ containing the tool description and model implementation.
 You may refer to tools/normalAbnormal.py as an example.
 
-General tools
+General tools:
 Create a Python script directly under /tools/ containing the tool logic.
 A simple example can be found in tools/windowInfo.py.
 
 ## Adding New Knowledge Base Files
-You may add PDF or TXT files directly to the folder:RAG/docs/
+You may add PDF or TXT files directly to the folder: RAG/docs/.
 They will automatically be ingested by the RAG module.
 
 # Citation
 If you find this work helpful, please consider citing:
 @misc{zhao2025eegagentunifiedframeworkautomated,
-      title={EEGAgent: A Unified Framework for Automated EEG Analysis Using Large Language Models}, 
+      title={EEGAgent: A Unified Framework for Automated EEG Analysis Using Large Language Models},
       author={Sha Zhao and Mingyi Peng and Haiteng Jiang and Tao Li and Shijian Li and Gang Pan},
       year={2025},
       eprint={2511.09947},
       archivePrefix={arXiv},
       primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2511.09947}, 
+      url={https://arxiv.org/abs/2511.09947},
 }
